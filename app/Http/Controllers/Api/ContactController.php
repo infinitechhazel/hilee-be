@@ -18,6 +18,7 @@ class ContactController extends Controller
         $validator = Validator::make($request->all(), [
             'name' => 'required|string|max:255',
             'email' => 'required|email|max:255',
+            'phone' => 'nullable|string|max:20', 
             'message' => 'required|string|max:5000',
             'subject' => 'required|string|max:5000',
         ]);
@@ -26,7 +27,7 @@ class ContactController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -34,6 +35,7 @@ class ContactController extends Controller
             $contact = Contact::create([
                 'name' => $request->name,
                 'email' => $request->email,
+                'phone' => $request->phone ?? null, 
                 'message' => $request->message,
                 'subject' => $request->subject,
                 'status' => 'unread',
@@ -42,13 +44,13 @@ class ContactController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Your message has been sent successfully! We will get back to you soon.',
-                'data' => $contact
+                'data' => $contact,
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to send message. Please try again later.',
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -58,16 +60,16 @@ class ContactController extends Controller
      */
     public function index(Request $request)
     {
-        $query = Contact::with(['replies.admin']);
+        $query = Contact::query();
 
         // Search functionality
         if ($request->has('search') && $request->search) {
             $search = $request->search;
-            $query->where(function($q) use ($search) {
+            $query->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
-                  ->orWhere('email', 'like', "%{$search}%")
-                  ->orWhere('subject', 'like', "%{$search}%")
-                  ->orWhere('message', 'like', "%{$search}%");
+                    ->orWhere('email', 'like', "%{$search}%")
+                    ->orWhere('subject', 'like', "%{$search}%")
+                    ->orWhere('message', 'like', "%{$search}%");
             });
         }
 
@@ -78,10 +80,10 @@ class ContactController extends Controller
 
         $perPage = $request->get('per_page', 15);
         $contacts = $query->orderBy('created_at', 'desc')->paginate($perPage);
-        
+
         return response()->json([
             'success' => true,
-            'data' => $contacts
+            'data' => $contacts,
         ]);
     }
 
@@ -92,10 +94,10 @@ class ContactController extends Controller
     {
         $contact = Contact::with(['replies.admin'])->find($id);
 
-        if (!$contact) {
+        if (! $contact) {
             return response()->json([
                 'success' => false,
-                'message' => 'Contact message not found'
+                'message' => 'Contact message not found',
             ], 404);
         }
 
@@ -106,7 +108,7 @@ class ContactController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $contact
+            'data' => $contact,
         ]);
     }
 
@@ -123,16 +125,16 @@ class ContactController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors' => $validator->errors(),
             ], 422);
         }
 
         $contact = Contact::find($id);
 
-        if (!$contact) {
+        if (! $contact) {
             return response()->json([
                 'success' => false,
-                'message' => 'Contact message not found'
+                'message' => 'Contact message not found',
             ], 404);
         }
 
@@ -141,7 +143,7 @@ class ContactController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Status updated successfully',
-            'data' => $contact
+            'data' => $contact,
         ]);
     }
 
@@ -158,16 +160,16 @@ class ContactController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation error',
-                'errors' => $validator->errors()
+                'errors' => $validator->errors(),
             ], 422);
         }
 
         $contact = Contact::find($id);
 
-        if (!$contact) {
+        if (! $contact) {
             return response()->json([
                 'success' => false,
-                'message' => 'Contact message not found'
+                'message' => 'Contact message not found',
             ], 404);
         }
 
@@ -187,13 +189,13 @@ class ContactController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Reply saved successfully',
-                'data' => $reply->load('admin')
+                'data' => $reply->load('admin'),
             ], 201);
         } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to send reply',
-                'error' => $e->getMessage()
+                'error' => $e->getMessage(),
             ], 500);
         }
     }

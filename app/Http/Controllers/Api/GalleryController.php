@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Gallery;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class GalleryController extends Controller
 {
@@ -16,11 +17,21 @@ class GalleryController extends Controller
      */
     public function index()
     {
-        $galleries = Gallery::all()->map(function ($g) {
-            return $this->appendImageUrl($g);
+        $galleries = Gallery::all();
+        
+        $data = $galleries->map(function ($g) {
+            return [
+                'id' => $g->id,
+                'title' => $g->title,
+                'description' => $g->description,
+                'image_url' => url($g->image_path),
+                'created_at' => $g->created_at,
+            ];
         });
 
-        return response()->json($galleries);
+        Log::info('[Gallery] Fetching galleries', ['count' => $data->count()]);
+
+        return response()->json($data);
     }
 
     /**
@@ -34,7 +45,7 @@ class GalleryController extends Controller
         }
 
         $request->validate([
-            'title' => 'nullable|string|max:255',
+            'title' => 'required|string|max:255',
             'description' => 'nullable|string',
             'image' => 'required|image|max:12288', // 12MB max
         ]);
@@ -47,7 +58,19 @@ class GalleryController extends Controller
             'image_path' => $imagePath,
         ]);
 
-        return response()->json($this->appendImageUrl($gallery), 201);
+        Log::info('[Gallery] Created new gallery', ['id' => $gallery->id, 'title' => $gallery->title]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Gallery created successfully',
+            'data' => [
+                'id' => $gallery->id,
+                'title' => $gallery->title,
+                'description' => $gallery->description,
+                'image_url' => url($gallery->image_path),
+                'created_at' => $gallery->created_at,
+            ]
+        ], 201);
     }
 
     public function update(Request $request, $id)
@@ -60,22 +83,41 @@ class GalleryController extends Controller
         $gallery = Gallery::findOrFail($id);
 
         $request->validate([
-            'title' => 'sometimes|nullable|string|max:255',
+            'title' => 'sometimes|required|string|max:255',
             'description' => 'nullable|string',
-            'image' => 'nullable|image|max:12288', // 12MB max
+            'image' => 'nullable|image|max:12288',
         ]);
 
+        // Update fields
+        if ($request->has('title')) {
+            $gallery->title = $request->title;
+        }
+        
+        if ($request->has('description')) {
+            $gallery->description = $request->description;
+        }
+
+        // Handle image update
         if ($request->hasFile('image')) {
             $this->deleteImage($gallery->image_path);
             $gallery->image_path = $this->saveImage($request->file('image'));
         }
 
-        $gallery->update([
-            'title' => $request->title ?? $gallery->title,
-            'description' => $request->description ?? $gallery->description,
-        ]);
+        $gallery->save();
 
-        return response()->json($this->appendImageUrl($gallery));
+        Log::info('[Gallery] Updated gallery', ['id' => $gallery->id]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Gallery updated successfully',
+            'data' => [
+                'id' => $gallery->id,
+                'title' => $gallery->title,
+                'description' => $gallery->description,
+                'image_url' => url($gallery->image_path),
+                'created_at' => $gallery->created_at,
+            ]
+        ]);
     }
 
     public function destroy($id)
@@ -87,15 +129,17 @@ class GalleryController extends Controller
 
         $gallery = Gallery::findOrFail($id);
 
-        // Delete image
-        $path = public_path($gallery->image_path);
-        if (file_exists($path)) {
-            unlink($path);
-        }
+        // Delete image file
+        $this->deleteImage($gallery->image_path);
 
         $gallery->delete();
 
-        return response()->json(['message' => 'Gallery deleted']);
+        Log::info('[Gallery] Deleted gallery', ['id' => $id]);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Gallery deleted successfully'
+        ]);
     }
 
     /**
@@ -124,19 +168,5 @@ class GalleryController extends Controller
         if ($path && file_exists($fullPath)) {
             unlink($fullPath);
         }
-    }
-
-    /**
-     * Append full URL for the frontend
-     */
-    private function appendImageUrl(Gallery $gallery)
-    {
-        return [
-            'id' => $gallery->id,
-            'title' => $gallery->title,
-            'description' => $gallery->description,
-            'image_url' => url($gallery->image_path), // full URL
-            'created_at' => $gallery->created_at,
-        ];
     }
 }

@@ -7,6 +7,7 @@ use Closure;
 use GuzzleHttp\Exception\RequestException;
 use GuzzleHttp\Promise\EachPromise;
 use GuzzleHttp\Utils;
+use Illuminate\Http\Client\Promises\LazyPromise;
 use Illuminate\Support\Defer\DeferredCallback;
 
 use function Illuminate\Support\defer;
@@ -103,7 +104,7 @@ class Batch
     /**
      * The date when the batch was created.
      *
-     * @var \Carbon\CarbonImmutable
+     * @var \Carbon\CarbonImmutable|null
      */
     public $createdAt = null;
 
@@ -148,6 +149,24 @@ class Batch
         $this->incrementPendingRequests();
 
         return $this->requests[$key] = $this->asyncRequest();
+    }
+
+    /**
+     * Add a request to the batch with a numeric index.
+     *
+     * @return \Illuminate\Http\Client\PendingRequest|\GuzzleHttp\Promise\Promise
+     *
+     * @throws \Illuminate\Http\Client\BatchInProgressException
+     */
+    public function newRequest()
+    {
+        if ($this->inProgress) {
+            throw new BatchInProgressException();
+        }
+
+        $this->incrementPendingRequests();
+
+        return $this->requests[] = $this->asyncRequest();
     }
 
     /**
@@ -252,18 +271,8 @@ class Batch
         }
 
         $results = [];
-        $promises = [];
 
-        foreach ($this->requests as $key => $item) {
-            $promise = match (true) {
-                $item instanceof PendingRequest => $item->getPromise(),
-                default => $item,
-            };
-
-            $promises[$key] = $promise;
-        }
-
-        if (! empty($promises)) {
+        if (! empty($this->requests)) {
             $eachPromiseOptions = [
                 'fulfilled' => function ($result, $key) use (&$results) {
                     $results[$key] = $result;
@@ -311,7 +320,16 @@ class Batch
                 $eachPromiseOptions['concurrency'] = $this->concurrencyLimit;
             }
 
-            (new EachPromise($promises, $eachPromiseOptions))->promise()->wait();
+            $promiseGenerator = function () {
+                foreach ($this->requests as $key => $item) {
+                    $promise = $item instanceof PendingRequest ? $item->getPromise() : $item;
+                    yield $key => $promise instanceof LazyPromise ? $promise->buildPromise() : $promise;
+                }
+            };
+
+            (new EachPromise($promiseGenerator(), $eachPromiseOptions))
+                ->promise()
+                ->wait();
         }
 
         // Before returning the results, we must ensure that the results are sorted
@@ -423,15 +441,11 @@ class Batch
      * @param  string  $method
      * @param  array  $parameters
      * @return \Illuminate\Http\Client\PendingRequest|\GuzzleHttp\Promise\Promise
+     *
+     * @throws \Illuminate\Http\Client\BatchInProgressException
      */
     public function __call(string $method, array $parameters)
     {
-        if ($this->inProgress) {
-            throw new BatchInProgressException();
-        }
-
-        $this->incrementPendingRequests();
-
-        return $this->requests[] = $this->asyncRequest()->$method(...$parameters);
+        return $this->newRequest()->{$method}(...$parameters);
     }
 }

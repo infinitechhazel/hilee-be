@@ -11,7 +11,13 @@ return Application::configure(basePath: dirname(__DIR__))
         commands: __DIR__ . '/../routes/console.php',
         health: '/up',
     )
+    
     ->withMiddleware(function (Middleware $middleware) {
+        // Exclude API routes from CSRF
+        $middleware->validateCsrfTokens(except: [
+            'api/*',
+        ]);
+    
         // Configure API middleware
         $middleware->api(prepend: [
             \Laravel\Sanctum\Http\Middleware\EnsureFrontendRequestsAreStateful::class,

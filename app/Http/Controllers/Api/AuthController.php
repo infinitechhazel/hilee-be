@@ -11,314 +11,201 @@ use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
-    /**
-     * Register a new user
-     */
+    public function account(Request $request)
+    {
+        try {
+            $user = $request->user();
+
+            if (!$user) {
+                return response()->json([
+                    'success' => false,
+                    'message' => 'Unauthenticated. Please login to continue.',
+                ], 401);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data'    => ['user' => $this->formatUser($user)],
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Account fetch failed', ['error' => $e->getMessage()]);
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to fetch account information.',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    public function me(Request $request)
+    {
+        $user = $request->user();
+
+        if (!$user) {
+            return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data'    => ['user' => $this->formatUser($user)],
+        ]);
+    }
+
     public function register(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'name' => 'required|string|max:255',
-            'email' => 'required|string|email|max:255|unique:users',
-            'password' => 'required|string|min:8',
-            'phone_number' => 'nullable|string|max:20',
-            'address' => 'nullable|string|max:500',
-            'fraternity_number' => 'nullable|string|max:100',
+            'name'                      => 'required|string|max:255',
+            'email'                     => 'required|string|email|max:255|unique:users',
+            'password'                  => 'required|string|min:8',
+            'password_confirmation'     => 'required|same:password',
+            'phone'                     => 'nullable|string|max:11',
+            'address'                   => 'nullable|string|max:500',
+            'city'                      => 'nullable|string|max:255',
+            'zip_code'                  => 'nullable|string|max:20',
+            // Accept verification fields from Next.js — nullable so they don't break if absent
+            'verification_token'        => 'nullable|string|max:255',
+            'verification_token_expiry' => 'nullable|string',
+            'email_verified'            => 'nullable|boolean',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors(),
+                'message' => $validator->errors()->first(),
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
         try {
             $user = User::create([
-                'name' => $request->name,
-                'email' => $request->email,
-                'password' => Hash::make($request->password),
-                'phone_number' => $request->phone_number,
-                'address' => $request->address,
-                'fraternity_number' => $request->fraternity_number,
-                'status' => 'pending',
-                'role' => 'member',
+                'name'                      => trim($request->name),
+                'email'                     => strtolower(trim($request->email)),
+                'password'                  => Hash::make($request->password),
+                'phone'                     => $request->phone    ?: null,
+                'address'                   => $request->address  ?: null,
+                'city'                      => $request->city     ?: null,
+                'zip_code'                  => $request->zip_code ?: null,
+                'role'                      => 'user',
+                'email_verified'            => false,
+                'verification_token'        => $request->verification_token        ?: null,
+                'verification_token_expiry' => $request->verification_token_expiry
+                    ? \Carbon\Carbon::parse($request->verification_token_expiry)
+                    : null,
             ]);
 
-            Log::info('New user registered', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-                'status' => $user->status,
-            ]);
-
-            // Don't create token during registration since account is pending
-            // User must wait for approval before they can login
+            Log::info('New user registered', ['user_id' => $user->id, 'email' => $user->email]);
 
             return response()->json([
                 'success' => true,
-                'message' => 'Registration successful! Your account is pending approval.',
-                'data' => [
-                    'user' => [
-                        'id' => $user->id,
-                        'name' => $user->name,
-                        'email' => $user->email,
-                        'phone_number' => $user->phone_number,
-                        'address' => $user->address,
-                        'fraternity_number' => $user->fraternity_number,
-                        'status' => $user->status,
-                    ],
-                ],
+                'message' => 'Registration successful! You can now login.',
+                'data'    => ['user' => $this->formatUser($user)],
             ], 201);
 
         } catch (\Exception $e) {
-            Log::error('Registration failed', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-            ]);
-
+            Log::error('Registration failed', ['error' => $e->getMessage()]);
             return response()->json([
                 'success' => false,
-                'message' => 'Registration failed',
-                'error' => $e->getMessage(),
+                'message' => 'Registration failed: ' . $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * Login user
-     */
     public function login(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'email' => 'required|email',
+            'email'    => 'required|email',
             'password' => 'required|string',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors(),
+                'message' => $validator->errors()->first(),
+                'errors'  => $validator->errors(),
             ], 422);
         }
 
-        // Find user by email
         $user = User::where('email', $request->email)->first();
 
-        // Check if user exists and password is correct
-        if (! $user || ! Hash::check($request->password, $user->password)) {
-            Log::warning('Failed login attempt', [
-                'email' => $request->email,
-                'ip' => $request->ip(),
-            ]);
-
+        if (!$user || !Hash::check($request->password, $user->password)) {
+            Log::warning('Failed login attempt', ['email' => $request->email, 'ip' => $request->ip()]);
             return response()->json([
                 'success' => false,
-                'message' => 'Invalid email or password',
+                'message' => 'Invalid email or password.',
             ], 401);
         }
 
-        // Check if account is deactivated
-        if ($user->status === 'deactivated') {
-            Log::info('Login attempt with deactivated account', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Your account has been deactivated.'.
-                            ($user->rejection_reason ? ' Reason: '.$user->rejection_reason : ' Please contact the administrator for assistance.'),
-                'data' => [
-                    'status' => 'deactivated',
-                    'reason' => $user->rejection_reason,
-                ],
-            ], 403);
-        }
-
-        // Check account status BEFORE creating token
-        if ($user->status === 'pending') {
-            Log::info('Login attempt with pending account', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Your account is still pending approval. Please wait for administrator verification.',
-                'data' => [
-                    'status' => 'pending',
-                    'registered_at' => $user->created_at->diffForHumans(),
-                ],
-            ], 403);
-        }
-
-        if ($user->status === 'rejected') {
-            Log::info('Login attempt with rejected account', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Your account registration was rejected.'.
-                            ($user->rejection_reason ? ' Reason: '.$user->rejection_reason : ' Please contact the administrator or register again with valid documents.'),
-                'data' => [
-                    'status' => 'rejected',
-                    'reason' => $user->rejection_reason,
-                ],
-            ], 403);
-        }
-
-        // Only approved users can login
-        if ($user->status !== 'approved') {
-            Log::warning('Login attempt with invalid status', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-                'status' => $user->status,
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Your account status is invalid. Please contact the administrator.',
-                'data' => [
-                    'status' => $user->status,
-                ],
-            ], 403);
-        }
-
-        // Create token for approved user
         $token = $user->createToken('auth_token')->plainTextToken;
 
-        Log::info('User logged in successfully', [
-            'user_id' => $user->id,
-            'email' => $user->email,
-            'role' => $user->role,
-        ]);
+        Log::info('User logged in', ['user_id' => $user->id, 'email' => $user->email, 'role' => $user->role]);
 
-        // IMPORTANT: Return token at root level for frontend compatibility
         return response()->json([
             'success' => true,
             'message' => 'Login successful',
-            'token' => $token,
-            'user' => [
-                'id' => $user->id,
-                'name' => $user->name,
-                'email' => $user->email,
-                'phone_number' => $user->phone_number,
-                'address' => $user->address,
-                'fraternity_number' => $user->fraternity_number,
-                'status' => $user->status,
-                'role' => $user->role,
-                'rejection_reason' => $user->rejection_reason,
-            ],
-        ], 200);
+            'token'   => $token,
+            'user'    => $this->formatUser($user),
+        ]);
     }
 
-    /**
-     * Logout user
-     */
     public function logout(Request $request)
     {
         try {
             $user = $request->user();
 
-            // Delete current access token
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
+            }
+
             $request->user()->currentAccessToken()->delete();
 
-            Log::info('User logged out', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-            ]);
+            Log::info('User logged out', ['user_id' => $user->id, 'email' => $user->email]);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Logged out successfully',
-            ], 200);
+            return response()->json(['success' => true, 'message' => 'Logged out successfully.']);
 
         } catch (\Exception $e) {
-            Log::error('Logout failed', [
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Logout failed',
-                'error' => $e->getMessage(),
-            ], 500);
+            Log::error('Logout failed', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Logout failed.', 'error' => $e->getMessage()], 500);
         }
     }
 
-    /**
-     * Get authenticated user
-     */
-    public function me(Request $request)
-    {
-        $user = $request->user();
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'user' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
-                    'email' => $user->email,
-                    'phone_number' => $user->phone_number,
-                    'address' => $user->address,
-                    'fraternity_number' => $user->fraternity_number,
-                    'status' => $user->status,
-                    'role' => $user->role,
-                    'rejection_reason' => $user->rejection_reason,
-                    'created_at' => $user->created_at,
-                    'updated_at' => $user->updated_at,
-                ],
-            ],
-        ], 200);
-    }
-
-    /**
-     * Refresh token
-     */
     public function refresh(Request $request)
     {
         try {
             $user = $request->user();
 
-            // Check if user is still approved
-            if ($user->status !== 'approved') {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Account is no longer active',
-                ], 403);
+            if (!$user) {
+                return response()->json(['success' => false, 'message' => 'Unauthenticated.'], 401);
             }
 
-            // Delete old tokens
             $user->tokens()->delete();
-
-            // Create new token
             $token = $user->createToken('auth_token')->plainTextToken;
 
-            Log::info('Token refreshed', [
-                'user_id' => $user->id,
-                'email' => $user->email,
-            ]);
+            Log::info('Token refreshed', ['user_id' => $user->id]);
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Token refreshed successfully',
-                'data' => ['token' => $token],
-            ], 200);
+            return response()->json(['success' => true, 'message' => 'Token refreshed.', 'data' => ['token' => $token]]);
 
         } catch (\Exception $e) {
-            Log::error('Token refresh failed', [
-                'error' => $e->getMessage(),
-            ]);
-
-            return response()->json([
-                'success' => false,
-                'message' => 'Token refresh failed',
-                'error' => $e->getMessage(),
-            ], 500);
+            Log::error('Token refresh failed', ['error' => $e->getMessage()]);
+            return response()->json(['success' => false, 'message' => 'Token refresh failed.', 'error' => $e->getMessage()], 500);
         }
+    }
+
+    private function formatUser(User $user): array
+    {
+        return [
+            'id'             => $user->id,
+            'name'           => $user->name,
+            'email'          => $user->email,
+            'phone'          => $user->phone,
+            'address'        => $user->address,
+            'city'           => $user->city,
+            'zip_code'       => $user->zip_code,
+            'role'           => $user->role,
+            'email_verified' => $user->email_verified,
+            'email_verified_at' => $user->email_verified_at,
+            'created_at'     => $user->created_at,
+            'updated_at'     => $user->updated_at,
+        ];
     }
 }

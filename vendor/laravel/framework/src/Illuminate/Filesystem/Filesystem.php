@@ -90,7 +90,7 @@ class Filesystem
                 if (flock($handle, LOCK_SH)) {
                     clearstatcache(true, $path);
 
-                    $contents = fread($handle, $this->size($path) ?: 1);
+                    $contents = stream_get_contents($handle);
 
                     flock($handle, LOCK_UN);
                 }
@@ -431,7 +431,7 @@ class Filesystem
     }
 
     /**
-     * Guess the file extension from the mime-type of a given file.
+     * Guess the file extension from the MIME type of a given file.
      *
      * @param  string  $path
      * @return string|null
@@ -461,7 +461,7 @@ class Filesystem
     }
 
     /**
-     * Get the mime-type of a given file.
+     * Get the MIME type of a given file.
      *
      * @param  string  $path
      * @return string|false

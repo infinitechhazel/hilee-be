@@ -6,10 +6,11 @@ use App\Http\Controllers\Controller;
 use App\Models\Vlog;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class VlogController extends Controller
 {
-    /** Public list */
+    // Public list
     public function index()
     {
         $vlogs = Vlog::where('is_active', 1)->get();
@@ -20,7 +21,7 @@ class VlogController extends Controller
         ]);
     }
 
-    /** Admin-only list */
+    // Admin-only list
     public function adminIndex(Request $request)
     {
         $admin = Auth::user();
@@ -32,7 +33,9 @@ class VlogController extends Controller
 
         $vlogs = Vlog::query()
             ->search($request->search)
-            ->when($request->category, fn ($q) => $q->where('category', $request->category))
+            ->when($request->category, function ($q) use ($request) {
+                return $q->where('category', $request->category);
+            })
             ->latest()
             ->paginate($perPage);
 
@@ -42,7 +45,7 @@ class VlogController extends Controller
         ]);
     }
 
-    /** Chunked video upload */
+    // Chunked video upload
     public function uploadChunk(Request $request, $vlogId = null)
     {
         $admin = $request->user();
@@ -61,15 +64,35 @@ class VlogController extends Controller
         $totalChunks = (int) $request->total_chunks;
         $filename = $request->filename;
 
-        $hash = md5($filename);
+        // Use filename + user ID for consistent hash across all chunks
+        $userId = $admin->id;
+        $uniqueId = $vlogId ? "edit_{$vlogId}_{$userId}" : "new_{$userId}";
+        $hash = md5($filename . $uniqueId);
         $tmpDir = storage_path("app/tmp_videos/{$hash}");
 
         if (! is_dir($tmpDir)) {
             mkdir($tmpDir, 0755, true);
         }
 
-        // Save chunk
-        $request->file('chunk')->move($tmpDir, $chunkIndex);
+        Log::info("Processing chunk", [
+            'chunk_index' => $chunkIndex,
+            'total_chunks' => $totalChunks,
+            'filename' => $filename,
+            'vlog_id' => $vlogId,
+            'hash' => $hash,
+            'tmp_dir' => $tmpDir,
+        ]);
+
+        // Save chunk with proper naming
+        $chunkFile = "{$tmpDir}/chunk_{$chunkIndex}";
+        $request->file('chunk')->move($tmpDir, "chunk_{$chunkIndex}");
+        
+        $chunkSize = filesize($chunkFile);
+        Log::info("Chunk saved", [
+            'path' => $chunkFile,
+            'size' => $chunkSize,
+            'exists' => file_exists($chunkFile),
+        ]);
 
         // Save metadata on first chunk
         if ($chunkIndex === 0) {
@@ -96,14 +119,36 @@ class VlogController extends Controller
 
             // Save metadata to tmp
             file_put_contents("{$tmpDir}/meta.json", json_encode($metaData));
+            Log::info("Metadata saved for upload session", ['hash' => $hash]);
         }
 
-        // Not last chunk → return
+        // Not last chunk - return
         if ($chunkIndex + 1 < $totalChunks) {
-            return response()->json(['success' => true, 'message' => 'Chunk uploaded']);
+            $currentChunk = $chunkIndex + 1;
+            return response()->json([
+                'success' => true, 
+                'message' => "Chunk {$currentChunk}/{$totalChunks} uploaded successfully",
+            ]);
         }
 
-        // Assemble final video
+        // ============================================
+        // LAST CHUNK - ASSEMBLE COMPLETE VIDEO
+        // ============================================
+        Log::info("Last chunk received, assembling video from {$totalChunks} chunks");
+
+        // Verify all chunks exist
+        for ($i = 0; $i < $totalChunks; $i++) {
+            $chunkPath = "{$tmpDir}/chunk_{$i}";
+            if (!file_exists($chunkPath)) {
+                Log::error("Missing chunk during assembly", ['chunk' => $i, 'path' => $chunkPath]);
+                return response()->json([
+                    'success' => false, 
+                    'message' => "Missing chunk {$i}. Upload may have been corrupted."
+                ], 500);
+            }
+        }
+
+        // Create final video directory
         $finalDir = public_path('vlogs/videos');
         if (! is_dir($finalDir)) {
             mkdir($finalDir, 0755, true);
@@ -111,34 +156,96 @@ class VlogController extends Controller
 
         $finalName = time().'_'.$filename;
         $finalPath = "{$finalDir}/{$finalName}";
-        $out = fopen($finalPath, 'wb');
+        
+        Log::info("Assembling video to: {$finalPath}");
 
+        // Open output file for writing
+        $out = fopen($finalPath, 'wb');
+        if (!$out) {
+            Log::error("Failed to create output file: {$finalPath}");
+            return response()->json(['success' => false, 'message' => 'Failed to create video file'], 500);
+        }
+
+        $totalBytesWritten = 0;
+
+        // Concatenate all chunks in correct order
         for ($i = 0; $i < $totalChunks; $i++) {
-            $in = fopen("{$tmpDir}/{$i}", 'rb');
-            stream_copy_to_stream($in, $out);
+            $chunkPath = "{$tmpDir}/chunk_{$i}";
+            
+            $in = fopen($chunkPath, 'rb');
+            if (!$in) {
+                fclose($out);
+                Log::error("Failed to read chunk: {$chunkPath}");
+                return response()->json(['success' => false, 'message' => "Failed to read chunk {$i}"], 500);
+            }
+
+            // Copy chunk to final file
+            $bytesCopied = stream_copy_to_stream($in, $out);
+            $totalBytesWritten += $bytesCopied;
+            
             fclose($in);
-            unlink("{$tmpDir}/{$i}");
+            
+            Log::info("Copied chunk {$i}", [
+                'bytes' => $bytesCopied,
+                'total_so_far' => $totalBytesWritten,
+            ]);
+            
+            // Delete chunk after successful copy
+            unlink($chunkPath);
         }
 
         fclose($out);
+        
+        $finalSize = filesize($finalPath);
+        Log::info("Video assembly complete", [
+            'path' => $finalPath,
+            'size_bytes' => $finalSize,
+            'size_mb' => round($finalSize / (1024 * 1024), 2),
+            'total_written' => $totalBytesWritten,
+        ]);
+
+        // Verify final file size
+        if ($finalSize === 0) {
+            Log::error("Final video file is empty!");
+            unlink($finalPath);
+            return response()->json(['success' => false, 'message' => 'Video assembly failed - empty file'], 500);
+        }
 
         // Load metadata
-        $meta = json_decode(file_get_contents("{$tmpDir}/meta.json"), true);
-        unlink("{$tmpDir}/meta.json");
-        rmdir($tmpDir);
+        $metaFile = "{$tmpDir}/meta.json";
+        if (!file_exists($metaFile)) {
+            Log::error("Missing metadata file: {$metaFile}");
+            unlink($finalPath);
+            return response()->json(['success' => false, 'message' => 'Missing metadata'], 500);
+        }
 
-        // Create or update vlog
+        $meta = json_decode(file_get_contents($metaFile), true);
+        unlink($metaFile);
+        
+        // Clean up temp directory
+        @rmdir($tmpDir);
+
+        // Create or update vlog record
         if ($vlogId) {
             $vlog = Vlog::findOrFail($vlogId);
-            $vlog->update([
-                ...$meta,
+            
+            // Delete old video if exists
+            if ($vlog->video && file_exists(public_path($vlog->video))) {
+                unlink(public_path($vlog->video));
+                Log::info("Deleted old video: {$vlog->video}");
+            }
+            
+            $vlog->update(array_merge($meta, [
                 'video' => "/vlogs/videos/{$finalName}",
-            ]);
+            ]));
+            
+            Log::info("Vlog updated successfully", ['id' => $vlog->id]);
         } else {
-            $vlog = Vlog::create([
-                ...$meta,
+            $vlog = Vlog::create(array_merge($meta, [
                 'video' => "/vlogs/videos/{$finalName}",
-            ]);
+            ]));
+            
+            Log::info("Vlog created successfully", ['id' => $vlog->id]);
         }
 
         return response()->json([
@@ -148,7 +255,7 @@ class VlogController extends Controller
         ]);
     }
 
-    /** Admin-only store */
+    // Admin-only store (fallback - non-chunked)
     public function store(Request $request)
     {
         $admin = Auth::user();
@@ -163,7 +270,7 @@ class VlogController extends Controller
             'description' => 'nullable|string',
             'content' => 'required|string',
             'is_active' => 'boolean',
-            'video' => 'nullable|string', // path returned from chunked upload
+            'video' => 'nullable|string',
             'poster' => 'nullable|image|mimes:jpg,jpeg,png,webp|max:10240',
         ]);
 
@@ -187,7 +294,7 @@ class VlogController extends Controller
         ], 201);
     }
 
-    /** Admin-only update via chunked upload */
+    // Admin-only update (non-chunked)
     public function update(Request $request, $id)
     {
         $admin = Auth::user();
@@ -197,93 +304,6 @@ class VlogController extends Controller
 
         $vlog = Vlog::findOrFail($id);
 
-        // ------------------------
-        // CHUNKED UPLOAD FLOW
-        // ------------------------
-        if ($request->hasFile('chunk')) {
-            // Only validate chunk fields if a file exists
-            $request->validate([
-                'chunk' => 'required|file',
-                'chunk_index' => 'required|integer',
-                'total_chunks' => 'required|integer',
-                'filename' => 'required|string',
-            ]);
-
-            $chunkIndex = (int) $request->chunk_index;
-            $totalChunks = (int) $request->total_chunks;
-            $filename = $request->filename;
-
-            $hash = md5($filename);
-            $tmpDir = storage_path("app/tmp_videos/{$hash}");
-            if (! is_dir($tmpDir)) {
-                mkdir($tmpDir, 0755, true);
-            }
-
-            // Save chunk
-            $request->file('chunk')->move($tmpDir, $chunkIndex);
-
-            // Save metadata on first chunk
-            if ($chunkIndex === 0) {
-                file_put_contents(
-                    "{$tmpDir}/meta.json",
-                    json_encode([
-                        'title' => $request->title,
-                        'category' => $request->category,
-                        'date' => $request->date,
-                        'content' => $request->content,
-                        'description' => $request->description,
-                        'is_active' => $request->is_active ?? 1,
-                    ])
-                );
-            }
-
-            // Not last chunk → return
-            if ($chunkIndex + 1 < $totalChunks) {
-                return response()->json(['success' => true, 'message' => 'Chunk uploaded']);
-            }
-
-            // Assemble final video
-            $finalDir = public_path('vlogs/videos');
-            if (! is_dir($finalDir)) {
-                mkdir($finalDir, 0755, true);
-            }
-            $finalName = time().'_'.$filename;
-            $finalPath = "{$finalDir}/{$finalName}";
-
-            $out = fopen($finalPath, 'wb');
-            for ($i = 0; $i < $totalChunks; $i++) {
-                $in = fopen("{$tmpDir}/{$i}", 'rb');
-                stream_copy_to_stream($in, $out);
-                fclose($in);
-                unlink("{$tmpDir}/{$i}");
-            }
-            fclose($out);
-
-            $meta = json_decode(file_get_contents("{$tmpDir}/meta.json"), true);
-            unlink("{$tmpDir}/meta.json");
-            rmdir($tmpDir);
-
-            // Delete old video if exists
-            if ($vlog->video && file_exists(public_path($vlog->video))) {
-                unlink(public_path($vlog->video));
-            }
-
-            // Update vlog with video + metadata
-            $vlog->update([
-                ...$meta,
-                'video' => "/vlogs/videos/{$finalName}",
-            ]);
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Vlog updated successfully',
-                'data' => $vlog->fresh(),
-            ]);
-        }
-
-        // ------------------------
-        // NORMAL METADATA UPDATE
-        // ------------------------
         $validated = $request->validate([
             'title' => 'sometimes|string|max:255',
             'date' => 'sometimes|date',
@@ -295,7 +315,23 @@ class VlogController extends Controller
             'poster' => 'nullable|image|mimes:jpg,jpeg,png,webp|max:10240',
         ]);
 
-        // Only update video if new file uploaded
+        // Handle poster upload
+        if ($request->hasFile('poster')) {
+            if ($vlog->poster && file_exists(public_path($vlog->poster))) {
+                unlink(public_path($vlog->poster));
+            }
+
+            $posterFile = $request->file('poster');
+            $posterName = time().'_'.$posterFile->getClientOriginalName();
+            $posterPath = public_path('vlogs/posters');
+            if (! file_exists($posterPath)) {
+                mkdir($posterPath, 0777, true);
+            }
+            $posterFile->move($posterPath, $posterName);
+            $validated['poster'] = '/vlogs/posters/'.$posterName;
+        }
+
+        // Handle video upload (non-chunked fallback)
         if ($request->hasFile('video')) {
             if ($vlog->video && file_exists(public_path($vlog->video))) {
                 unlink(public_path($vlog->video));
@@ -312,23 +348,6 @@ class VlogController extends Controller
             $validated['video'] = '/vlogs/videos/'.$filename;
         }
 
-        // Handle poster upload
-        if ($request->hasFile('poster')) {
-            // Delete old poster
-            if ($vlog->poster && file_exists(public_path($vlog->poster))) {
-                unlink(public_path($vlog->poster));
-            }
-
-            $posterFile = $request->file('poster');
-            $posterName = time().'_'.$posterFile->getClientOriginalName();
-            $posterPath = public_path('vlogs/posters');
-            if (! file_exists($posterPath)) {
-                mkdir($posterPath, 0777, true);
-            }
-            $posterFile->move($posterPath, $posterName);
-            $validated['poster'] = '/vlogs/posters/'.$posterName;
-        }
-
         $vlog->update($validated);
 
         return response()->json([
@@ -338,7 +357,7 @@ class VlogController extends Controller
         ]);
     }
 
-    /** Admin-only delete */
+    // Admin-only delete
     public function destroy($id)
     {
         $admin = Auth::user();
@@ -346,13 +365,14 @@ class VlogController extends Controller
             return response()->json(['success' => false, 'message' => 'Only admins can delete vlogs.'], 403);
         }
 
-        // Find the vlog or fail
         $vlog = Vlog::findOrFail($id);
+        
+        // Delete video file
         if ($vlog->video && file_exists(public_path($vlog->video))) {
             unlink(public_path($vlog->video));
         }
 
-        // Delete poster file if exists
+        // Delete poster file
         if ($vlog->poster && file_exists(public_path($vlog->poster))) {
             unlink(public_path($vlog->poster));
         }

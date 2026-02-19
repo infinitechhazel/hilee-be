@@ -15,40 +15,29 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
-        'phone_number',
+        'phone',
         'address',
-        'fraternity_number',
-        'status',
+        'city',
+        'zip_code',
         'role',
-        'rejection_reason',
+        'email_verified',
+        'verification_token',
+        'verification_token_expiry',
     ];
 
     protected $hidden = [
         'password',
         'remember_token',
-    ];
-
-    protected $visible = [
-        'id',
-        'name',
-        'email',
-        'phone_number',
-        'address',
-        'fraternity_number',
-        'status',
-        'role',
-        'rejection_reason',
-        'created_at',
-        'updated_at',
-        'email_verified_at',
+        'verification_token', // never expose token in responses
     ];
 
     protected $casts = [
-        'email_verified_at' => 'datetime',
-        'password' => 'hashed',
+        'email_verified_at'        => 'datetime',
+        'verification_token_expiry' => 'datetime',
+        'email_verified'           => 'boolean',
+        'password'                 => 'hashed',
     ];
 
-    // Role check methods
     public function isAdmin(): bool
     {
         return $this->role === 'admin';
@@ -56,56 +45,12 @@ class User extends Authenticatable
 
     public function isUser(): bool
     {
-        return $this->role === 'member';
+        return $this->role === 'user';
     }
 
-    // Add isMember() as an alias for isUser()
-    public function isMember(): bool
+    public function isEmailVerified(): bool
     {
-        return $this->role === 'member';
-    }
-
-    // Status check methods
-    public function isApproved(): bool
-    {
-        return $this->status === 'approved';
-    }
-
-    public function isPending(): bool
-    {
-        return $this->status === 'pending';
-    }
-
-    public function isRejected(): bool
-    {
-        return $this->status === 'rejected';
-    }
-
-    public function isDeactivated(): bool
-    {
-        return $this->status === 'deactivated';
-    }
-
-    // Query scopes for status
-    public function scopeApproved($query)
-    {
-        return $query->where('status', 'approved');
-    }
-
-    public function scopePending($query)
-    {
-        return $query->where('status', 'pending');
-    }
-
-    public function scopeDeactivated($query)
-    {
-        return $query->where('status', 'deactivated');
-    }
-
-    // Query scopes for role
-    public function scopeUsers($query)
-    {
-        return $query->where('role', 'member');
+        return $this->email_verified === true;
     }
 
     public function scopeAdmins($query)
@@ -113,16 +58,8 @@ class User extends Authenticatable
         return $query->where('role', 'admin');
     }
 
-    public function members()
+    public function scopeUsers($query)
     {
-        return $this->hasMany(Member::class);
-    }
-
-    /**
-     * Relationship: User has many business partners
-     */
-    public function businessPartners()
-    {
-        return $this->hasMany(BusinessPartner::class);
+        return $query->where('role', 'user');
     }
 }

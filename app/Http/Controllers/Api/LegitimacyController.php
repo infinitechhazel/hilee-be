@@ -235,7 +235,8 @@ class LegitimacyController extends Controller
             'certification_details' => 'nullable|string',
             'school_name' => 'nullable|string|max:255',
             'address' => 'nullable|string|max:500',
-            'logo_file' => 'nullable|image|mimes:png,jpg,jpeg|max:5120',
+            'logo_file_1' => 'nullable|image|mimes:png,jpg,jpeg|max:5120',
+            'logo_file_2' => 'nullable|image|mimes:png,jpg,jpeg|max:5120',
             'signatories' => 'nullable|array',
             'signatories.*.name' => 'required_with:signatories|string|max:255',
             'signatories.*.role' => 'nullable|string|max:255',
@@ -255,26 +256,39 @@ class LegitimacyController extends Controller
         try {
             // Find the user by fraternity number
             $user = \App\Models\User::where('fraternity_number', (int) $request->fraternity_number)->first();
-            // if (!$user) {
-            //     return response()->json([
-            //         'success' => false,
-            //         'message' => 'No user found with that fraternity number.',
-            //     ], 404);
-            // }
 
-            // Handle logo file upload
-            $logoUrl = null;
-            if ($request->hasFile('logo_file')) {
-                $logoFile = $request->file('logo_file');
-                $logoFileName = time() . '_logo_' . uniqid() . '.' . $logoFile->getClientOriginalExtension();
+            // Handle logo file 1 upload
+            $logoUrl1 = null;
+            if ($request->hasFile('logo_file_1')) {
+                $logoFile = $request->file('logo_file_1');
+                $logoFileName = time() . '_logo1_' . uniqid() . '.' . $logoFile->getClientOriginalExtension();
 
-                $logoDirectory = public_path('logos');
+                // Target the logo1 subfolder specifically
+                $logoDirectory = public_path('logos/logo1');
+
                 if (!file_exists($logoDirectory)) {
                     mkdir($logoDirectory, 0755, true);
                 }
 
                 $logoFile->move($logoDirectory, $logoFileName);
-                $logoUrl = "/logos/$logoFileName";
+                $logoUrl1 = "logos/logo1/$logoFileName"; // Consistent URL
+            }
+
+            // Handle logo file 2 upload
+            $logoUrl2 = null;
+            if ($request->hasFile('logo_file_2')) {
+                $logoFile = $request->file('logo_file_2');
+                $logoFileName = time() . '_logo2_' . uniqid() . '.' . $logoFile->getClientOriginalExtension();
+
+                // Target the logo2 subfolder specifically
+                $logoDirectory = public_path('logos/logo2');
+
+                if (!file_exists($logoDirectory)) {
+                    mkdir($logoDirectory, 0755, true);
+                }
+
+                $logoFile->move($logoDirectory, $logoFileName);
+                $logoUrl2 = "logos/logo2/$logoFileName"; // Consistent URL
             }
 
             $legitimacy = LegitimacyRequest::create([
@@ -289,7 +303,8 @@ class LegitimacyController extends Controller
                 'certification_details' => $request->certification_details,
                 'school_name' => $request->school_name,
                 'address' => $request->address,
-                'logo_url' => $logoUrl,
+                'logo_url1' => $logoUrl1,
+                'logo_url2' => $logoUrl2,
                 'approved_at' => $request->status === 'approved' ? now() : null,
             ]);
 
@@ -412,7 +427,8 @@ class LegitimacyController extends Controller
                 'certification_details' => 'nullable|string',
                 'school_name' => 'nullable|string|max:255',
                 'address' => 'nullable|string|max:500',
-                'logo_file' => 'nullable|image|mimes:png,jpg,jpeg|max:5120',
+                'logo_file_1' => 'nullable|image|mimes:png,jpg,jpeg|max:5120',
+                'logo_file_2' => 'nullable|image|mimes:png,jpg,jpeg|max:5120',
                 'signatories' => 'nullable|array',
                 'signatories.*.id' => 'sometimes|exists:signatories,id',
                 'signatories.*.name' => 'required_with:signatories|string|max:255',
@@ -423,13 +439,11 @@ class LegitimacyController extends Controller
                 'deleted_signatories.*' => 'exists:signatories,id',
             ]);
 
-
             Log::info('Incoming cert fields', [
                 'certification_details' => $request->certification_details,
                 'school_name' => $request->school_name,
                 'address' => $request->address,
             ]);
-
 
             if ($validator->fails()) {
                 Log::error('=== VALIDATION FAILED ===', [
@@ -445,39 +459,63 @@ class LegitimacyController extends Controller
 
             Log::info('Validation passed');
 
-            // Handle logo file upload
-            if ($request->hasFile('logo_file')) {
+            // Handle logo file 1 upload
+            if ($request->hasFile('logo_file_1')) {
                 try {
-                    // Delete old logo if exists
-                    if ($legitimacy->logo_url) {
-                        $oldLogoPath = public_path($legitimacy->logo_url);
+                    // Delete old logo 1 if exists
+                    if ($legitimacy->logo_url1) {
+                        $oldLogoPath = public_path($legitimacy->logo_url1);
                         if (file_exists($oldLogoPath)) {
                             @unlink($oldLogoPath);
-                            Log::info('Deleted old logo file', ['path' => $oldLogoPath]);
                         }
                     }
 
-                    $logoFile = $request->file('logo_file');
-                    $logoFileName = time() . '_logo_' . uniqid() . '.' . $logoFile->getClientOriginalExtension();
+                    $logoFile = $request->file('logo_file_1');
+                    $logoFileName = time() . '_logo1_' . uniqid() . '.' . $logoFile->getClientOriginalExtension();
 
-                    $logoDirectory = public_path('logos');
+                    // Target the logo1 subfolder specifically
+                    $logoDirectory = public_path('logos/logo1');
                     if (!file_exists($logoDirectory)) {
                         mkdir($logoDirectory, 0755, true);
-                        Log::info('Created logos directory');
                     }
 
                     $logoFile->move($logoDirectory, $logoFileName);
-                    $legitimacy->logo_url = "/logos/$logoFileName";
+                    // Save URL without a leading slash if that's your standard, 
+                    // or keep "/logos/logo1/..." for absolute paths
+                    $legitimacy->logo_url1 = "logos/logo1/$logoFileName";
 
-                    Log::info('Logo uploaded', [
-                        'filename' => $logoFileName,
-                        'path' => $legitimacy->logo_url,
-                    ]);
+                    Log::info('Logo 1 updated in subfolder', ['path' => $legitimacy->logo_url1]);
                 } catch (\Exception $e) {
-                    Log::error('Logo upload failed', [
-                        'error' => $e->getMessage(),
-                        'trace' => $e->getTraceAsString(),
-                    ]);
+                    Log::error('Logo 1 update failed', ['error' => $e->getMessage()]);
+                }
+            }
+
+            // Handle logo file 2 upload
+            if ($request->hasFile('logo_file_2')) {
+                try {
+                    // Delete old logo 2 if exists
+                    if ($legitimacy->logo_url2) {
+                        $oldLogoPath = public_path($legitimacy->logo_url2);
+                        if (file_exists($oldLogoPath)) {
+                            @unlink($oldLogoPath);
+                        }
+                    }
+
+                    $logoFile = $request->file('logo_file_2');
+                    $logoFileName = time() . '_logo2_' . uniqid() . '.' . $logoFile->getClientOriginalExtension();
+
+                    // Target the logo2 subfolder specifically
+                    $logoDirectory = public_path('logos/logo2');
+                    if (!file_exists($logoDirectory)) {
+                        mkdir($logoDirectory, 0755, true);
+                    }
+
+                    $logoFile->move($logoDirectory, $logoFileName);
+                    $legitimacy->logo_url2 = "logos/logo2/$logoFileName";
+
+                    Log::info('Logo 2 updated in subfolder', ['path' => $legitimacy->logo_url2]);
+                } catch (\Exception $e) {
+                    Log::error('Logo 2 update failed', ['error' => $e->getMessage()]);
                 }
             }
 
@@ -639,7 +677,6 @@ class LegitimacyController extends Controller
         }
     }
 
-
     public function adminDestroy($id)
     {
         $admin = Auth::user();
@@ -661,9 +698,17 @@ class LegitimacyController extends Controller
         }
 
         try {
-            // Delete logo file if exists
-            if ($legitimacy->logo_url) {
-                $logoPath = public_path($legitimacy->logo_url);
+            // Delete logo file 1 if exists
+            if ($legitimacy->logo_url1) {
+                $logoPath = public_path($legitimacy->logo_url1);
+                if (file_exists($logoPath)) {
+                    @unlink($logoPath);
+                }
+            }
+
+            // Delete logo file 2 if exists
+            if ($legitimacy->logo_url2) {
+                $logoPath = public_path($legitimacy->logo_url2);
                 if (file_exists($logoPath)) {
                     @unlink($logoPath);
                 }
@@ -722,42 +767,74 @@ class LegitimacyController extends Controller
                 ], 404);
             }
 
-            // Prepare logo path
-            $logoPath = $legitimacy->logo_url
-                ? public_path($legitimacy->logo_url)
-                : public_path('images/logo.png');
-            $logoExists = file_exists($logoPath);
+            // Prepare logo paths - support both logo 1 and logo 2
+            $logoPath1 = null;
+            $logoExists1 = false;
+            $logoPath2 = null;
+            $logoExists2 = false;
+
+            // Check for custom logo 1
+            if ($legitimacy->logo_url1) {
+                $customLogoPath = public_path($legitimacy->logo_url1);
+                if (file_exists($customLogoPath)) {
+                    $logoPath1 = $customLogoPath;
+                    $logoExists1 = true;
+                    Log::info("Custom logo 1 found at: {$logoPath1}");
+                } else {
+                    Log::warning("Custom logo 1 not found at: {$customLogoPath}");
+                }
+            }
+
+            // Check for custom logo 2
+            if ($legitimacy->logo_url2) {
+                $customLogoPath2 = public_path($legitimacy->logo_url2);
+                if (file_exists($customLogoPath2)) {
+                    $logoPath2 = $customLogoPath2;
+                    $logoExists2 = true;
+                    Log::info("Custom logo 2 found at: {$logoPath2}");
+                } else {
+                    Log::warning("Custom logo 2 not found at: {$customLogoPath2}");
+                }
+            }
+
+            // Fallback to default logo if custom doesn't exist
+            if (!$logoExists1) {
+                $defaultLogoPath = public_path('images/logo.png');
+                if (file_exists($defaultLogoPath)) {
+                    $logoPath1 = $defaultLogoPath;
+                    $logoExists1 = true;
+                    Log::info("Using default logo 1 at: {$logoPath1}");
+                } else {
+                    Log::error("Default logo not found at: {$defaultLogoPath}");
+                }
+            }
 
             // Prepare data
             $data = [
                 'legitimacy' => $legitimacy,
                 'user' => $legitimacy->user,
                 'signatories' => $legitimacy->signatories,
-
-                // 🔥 ADD THESE
                 'certificationDetails' => $legitimacy->certification_details,
                 'schoolName' => $legitimacy->school_name,
                 'address' => $legitimacy->address,
-                'customLogo' => $legitimacy->logo_url,
-
                 'generatedDate' => now()->format('F d, Y'),
                 'certificateDate' => $legitimacy->certificate_date
                     ? \Carbon\Carbon::parse($legitimacy->certificate_date)->format('F d, Y')
                     : now()->format('F d, Y'),
-
                 'statusClass' => 'status-' . $legitimacy->status,
-
-                // fallback logo
-                'logoPath' => public_path('images/logo.png'),
-                'logoExists' => file_exists(public_path('images/logo.png')),
+                'logoPath' => $logoPath1,
+                'logoExists' => $logoExists1,
+                'logoPath2' => $logoPath2,
+                'logoExists2' => $logoExists2,
             ];
 
             $pdf = Pdf::loadView('pdf.legitimacy-certificate', $data)
-                ->setPaper('a4', 'landscape')
-                ->setOption('margin-top', 15)
-                ->setOption('margin-bottom', 15)
-                ->setOption('margin-left', 15)
-                ->setOption('margin-right', 15);
+                ->setPaper('a4', 'portrait')
+                ->setOption('margin-top', 0)
+                ->setOption('margin-bottom', 0)
+                ->setOption('margin-left', 0)
+                ->setOption('margin-right', 0)
+                ->setOption('enable-local-file-access', true);
 
             $filename = 'certificate-' . str_replace(' ', '-', strtolower($legitimacy->alias)) . '-' . now()->format('Y-m-d') . '.pdf';
 
@@ -836,7 +913,6 @@ class LegitimacyController extends Controller
     /**
      * Generate PDF certificate for own legitimacy request (members only)
      */
-
     public function userGeneratePDF($id)
     {
         try {
@@ -869,28 +945,54 @@ class LegitimacyController extends Controller
                 ], 403);
             }
 
+            // Prepare logo paths
+            $logoPath1 = null;
+            $logoExists1 = false;
+            $logoPath2 = null;
+            $logoExists2 = false;
+
+            if ($legitimacy->logo_url1) {
+                $customLogoPath = public_path($legitimacy->logo_url1);
+                if (file_exists($customLogoPath)) {
+                    $logoPath1 = $customLogoPath;
+                    $logoExists1 = true;
+                }
+            }
+
+            if ($legitimacy->logo_url2) {
+                $customLogoPath2 = public_path($legitimacy->logo_url2);
+                if (file_exists($customLogoPath2)) {
+                    $logoPath2 = $customLogoPath2;
+                    $logoExists2 = true;
+                }
+            }
+
+            // Fallback to default logo
+            if (!$logoExists1) {
+                $defaultLogoPath = public_path('images/logo.png');
+                if (file_exists($defaultLogoPath)) {
+                    $logoPath1 = $defaultLogoPath;
+                    $logoExists1 = true;
+                }
+            }
+
             // Prepare data
             $data = [
                 'legitimacy' => $legitimacy,
                 'user' => $legitimacy->user,
                 'signatories' => $legitimacy->signatories,
-
-                // 🔥 ADD THESE
                 'certificationDetails' => $legitimacy->certification_details,
                 'schoolName' => $legitimacy->school_name,
                 'address' => $legitimacy->address,
-                'customLogo' => $legitimacy->logo_url,
-
                 'generatedDate' => now()->format('F d, Y'),
                 'certificateDate' => $legitimacy->certificate_date
                     ? \Carbon\Carbon::parse($legitimacy->certificate_date)->format('F d, Y')
                     : now()->format('F d, Y'),
-
                 'statusClass' => 'status-' . $legitimacy->status,
-
-                // fallback logo
-                'logoPath' => public_path('images/logo.png'),
-                'logoExists' => file_exists(public_path('images/logo.png')),
+                'logoPath' => $logoPath1,
+                'logoExists' => $logoExists1,
+                'logoPath2' => $logoPath2,
+                'logoExists2' => $logoExists2,
             ];
 
             $pdf = Pdf::loadView('pdf.legitimacy-certificate', $data)

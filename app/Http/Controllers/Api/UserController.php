@@ -7,6 +7,7 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Barryvdh\DomPDF\Facade\Pdf;
 
 class UserController extends Controller
@@ -14,37 +15,27 @@ class UserController extends Controller
     public function index(Request $request)
     {
         try {
-            $query = User::where('role', 'member')
-                ->select([
-                    'id',
-                    'name',
-                    'email',
-                    'phone_number',
-                    'address',
-                    'fraternity_number',
-                    'status',
-                    'role',
-                    'rejection_reason',
-                    'created_at',
-                    'updated_at',
-                    'email_verified_at'
-                ]);
+            // start query builder; we'll apply filters dynamically
+        $query = User::query();
 
-            // Filter by status
-            if ($request->has('status') && $request->status !== 'all') {
-                $query->where('status', $request->status);
-            }
+        // optional role filter
+        if ($request->has('role')) {
+            $query->where('role', $request->role);
+        }
 
-            // Search by name, email, or phone
-            if ($request->has('search') && !empty($request->search)) {
-                $search = $request->search;
-                $query->where(function ($q) use ($search) {
-                    $q->where('name', 'like', "%{$search}%")
-                        ->orWhere('email', 'like', "%{$search}%")
-                        ->orWhere('phone_number', 'like', "%{$search}%")
-                        ->orWhere('address', 'like', "%{$search}%");
-                });
-            }
+        // status filter only if the column actually exists in the table
+        if (Schema::hasColumn('users', 'status') && $request->has('status') && $request->status !== 'all') {
+            $query->where('status', $request->status);
+        }
+
+        // Search by name or other searchable fields
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('name', 'like', "%{$search}%");
+                // additional searchable columns could be chained here if needed
+            });
+        }
 
             $perPage = $request->get('per_page', 15);
             $users = $query->latest()->paginate($perPage);

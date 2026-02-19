@@ -21,7 +21,8 @@ class LegitimacyRequest extends Model
         'certification_details',  // NEW
         'school_name',            // NEW
         'address',                // NEW
-        'logo_url',               // NEW
+        'logo_url1',               // NEW
+        'logo_url2',               // NEW
         'approved_at',
     ];
 

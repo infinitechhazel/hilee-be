@@ -14,6 +14,36 @@ class AnnouncementController extends Controller
     /**
      * List announcements
      */
+    /**
+ * List published/active announcements (public endpoint)
+ */
+public function published(Request $request)
+{
+    $query = Announcement::where('is_active', true);
+
+    if ($request->filled('category')) {
+        $query->where('category', $request->category);
+    }
+
+    if ($request->filled('search')) {
+        $search = $request->search;
+        $query->where(function ($q) use ($search) {
+            $q->where('title', 'like', "%{$search}%")
+                ->orWhere('content', 'like', "%{$search}%")
+                ->orWhere('description', 'like', "%{$search}%");
+        });
+    }
+
+    $query->orderBy(
+        $request->get('sort_by', 'priority'),
+        $request->get('sort_order', 'desc')
+    )->orderBy('created_at', 'desc');
+
+    return response()->json([
+        'success' => true,
+        'data' => $query->paginate($request->get('per_page', 15)),
+    ]);
+}
     public function index(Request $request)
     {
         $query = Announcement::query();

@@ -17,9 +17,10 @@ class Contact extends Model
     protected $fillable = [
         'name',
         'email',
+        'phone',
         'message',
         'status',
-        'subject'
+        'subject',
     ];
 
     /**
@@ -31,7 +32,8 @@ class Contact extends Model
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
     ];
-     public function replies()
+
+    public function replies()
     {
         return $this->hasMany(ContactReply::class);
     }
