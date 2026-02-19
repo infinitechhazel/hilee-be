@@ -1,9 +1,10 @@
 <?php
 
+use App\Http\Controllers\Api\AccountSettingsController;
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CartController;
-use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\ContactController;
+use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\ProductController;
 use App\Http\Controllers\Api\UserController;
 use Illuminate\Http\Request;
@@ -38,6 +39,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/users/{id}', [UserController::class, 'show']);
     Route::put('/users/{id}/status', [UserController::class, 'updateStatus']);
     Route::get('/users/statistics', [UserController::class, 'statistics']);
+    Route::put('/users/{id}/deactivate', [UserController::class, 'deactivate']);
+    Route::put('/users/{id}/reactivate', [UserController::class, 'reactivate']);
+
 });
 
 // ===================================
@@ -60,9 +64,16 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('admin/dashboard', [DashboardController::class, 'adminIndex']);
 });
 
-
-// CONTACTS    
+// CONTACTS
 Route::post('contacts', [ContactController::class, 'store']);
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('contacts', [ContactController::class, 'index']);
+});
+
+// Account Settings
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/account', [AccountSettingsController::class, 'getAccount']);
+    Route::put('/account/profile', [AccountSettingsController::class, 'updateProfile']);
+    Route::put('/account/shipping', [AccountSettingsController::class, 'updateShipping']);
+    Route::put('/account/password', [AccountSettingsController::class, 'updatePassword']);
 });
