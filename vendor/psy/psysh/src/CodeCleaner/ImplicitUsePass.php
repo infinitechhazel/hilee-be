@@ -3,7 +3,7 @@
 /*
  * This file is part of Psy Shell.
  *
- * (c) 2012-2025 Justin Hileman
+ * (c) 2012-2026 Justin Hileman
  *
  * For the full copyright and license information, please view the LICENSE
  * file that was distributed with this source code.
@@ -180,6 +180,7 @@ class ImplicitUsePass extends CodeCleanerPass
                     $seen[$shortNameLower] = true;
 
                     if ($this->shouldAddImplicitUseInContext($shortName, $shortNameLower, $aliases)) {
+                        // @phan-suppress-next-line PhanTypeArraySuspiciousNullable - shortNameMap is initialized in beforeTraverse
                         $uses[$shortName] = $this->shortNameMap[$shortNameLower];
                     }
                 }
