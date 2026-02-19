@@ -99,21 +99,18 @@ class OrderController extends Controller
             $user = $request->user();
 
             if (!$user) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized',
-                ], 401);
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
             }
 
-
-            // Validate the request
             $validator = Validator::make($request->all(), [
-                'payment_method' => 'required|string',
-                'order_code' => 'string|unique:orders,order_code',
-                'proof_of_payment' => 'required|image|mimes:jpeg,png,jpg,gif|max:5120', // 5MB max
-                'notes' => 'nullable|string',
-                'total_amount' => 'required|numeric|min:0',
-                'items' => 'required|string', // JSON string of items
+                'items' => 'required|array|min:1',
+                'items.*.id' => 'nullable',           // id can be null for guest items
+                'items.*.price' => 'required|numeric',
+                'items.*.quantity' => 'required|integer|min:1',
+                'customer_name' => 'required|string',
+                'customer_email' => 'required|email',
+                'customer_phone' => 'required|string',
+                'payment_method' => 'required|string|in:cash,gcash,security_bank',
             ]);
 
             if ($validator->fails()) {
@@ -124,95 +121,108 @@ class OrderController extends Controller
                 ], 422);
             }
 
-            // Parse items JSON
-            $items = json_decode($request->input('items'), true);
+            // Get items - handle both JSON body and form data
+            $items = $request->input('items');
+            if (is_string($items)) {
+                $items = json_decode($items, true);
+            }
+
+            Log::info('Items received', ['items' => $request->items]);
 
             if (!$items || !is_array($items) || count($items) === 0) {
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Invalid items data',
-                ], 422);
+                return response()->json(['success' => false, 'message' => 'Invalid items data'], 422);
             }
 
-            $proofOfPaymentPath = null;
-            if ($request->hasFile('proof_of_payment')) {
-                $file = $request->file('proof_of_payment');
+            // Handle receipt_file - base64 from JSON body
+            $receiptFilePath = null;
+            $receiptFile = $request->input('receipt_file');
 
-                // Generate unique filename
-                $filename = time() . '_' . uniqid() . '.' . $file->getClientOriginalExtension();
+            if ($receiptFile && str_starts_with($receiptFile, 'data:image')) {
+                $image = explode(',', $receiptFile);
+                $imageData = base64_decode($image[1]);
 
-                // Ensure the directory exists
-                $directory = 'proof_of_payments';
-                $fullPath = public_path('images/' . $directory);
+                preg_match('/data:image\/(\w+);/', $receiptFile, $matches);
+                $ext = $matches[1] ?? 'jpg';
 
-                if (!file_exists($fullPath)) {
-                    mkdir($fullPath, 0755, true);
+                $filename = time() . '_' . uniqid() . '.' . $ext;
+                $directory = public_path('images/proof_of_payments');
+
+                if (!file_exists($directory)) {
+                    mkdir($directory, 0755, true);
                 }
 
-                // Move file to public folder (NOT using storeAs!)
-                $file->move($fullPath, $filename);
-
-                // Store relative path for database
-                $proofOfPaymentPath = $directory . '/' . $filename;
-
-                Log::info('Proof of payment stored at: ' . $fullPath . '/' . $filename);
+                file_put_contents($directory . '/' . $filename, $imageData);
+                $receiptFilePath = $filename; // just the filename; URL built in model accessor
             }
 
-            // Start database transaction
             DB::beginTransaction();
 
-            // Generate a unique order code 
-            $orderCode = 'ORD' . now()->format('Ymd') . '' . Str::upper(Str::random(6));
+            // Generate unique order codes
+            $orderNumber = 'ORD-' . now()->format('Ymd') . '-' . strtoupper(Str::random(4));
+            $orderCode = 'ORD' . now()->format('Ymd') . Str::upper(Str::random(6));
+
+            // Calculate totals from items
+            $subtotal = collect($items)->sum(fn($item) => $item['price'] * $item['quantity']);
+            $total = $subtotal; // adjust if you have delivery fees/tax
 
             try {
-                // Create the order
                 $order = Order::create([
                     'user_id' => $user->id,
+                    'order_number' => $orderNumber,
                     'order_code' => $orderCode,
-                    'total_price' => $request->input('total_amount'),
+                    'customer_name' => $request->input('customer_name'),
+                    'customer_email' => $request->input('customer_email'),
+                    'customer_phone' => $request->input('customer_phone'),
+                    'delivery_address' => $request->input('delivery_address'),
+                    'delivery_city' => $request->input('delivery_city'),
+                    'delivery_zip_code' => $request->input('delivery_zip_code'),
+                    'payment_method' => $request->input('payment_method', 'cash'),
+                    'payment_status' => 'pending',
+                    'receipt_file' => $receiptFilePath,
                     'status' => 'pending',
-                    'payment_method' => $request->input('payment_method'),
-                    'proof_of_payment' => $proofOfPaymentPath,
+                    'subtotal' => $subtotal,
+                    'total' => $total,
                     'notes' => $request->input('notes'),
-                    'ordered_at' => now(),
                 ]);
 
-                // Create order items and update product stock
                 foreach ($items as $item) {
-                    // Verify product exists and has enough stock
-                    $product = Product::find($item['id']);
+                    $product = isset($item['id']) ? Product::find($item['id']) : null;
 
                     if (!$product) {
-                        throw new \Exception("Product not found: " . $item['name']);
+                        // Guest/no-product-match: store item data directly
+                        OrderItem::create([
+                            'order_id' => $order->id,
+                            'order_code' => $orderCode,
+                            'product_id' => null,
+                            'name' => $item['name'],
+                            'quantity' => $item['quantity'],
+                            'price' => $item['price'],
+                            'subtotal' => $item['price'] * $item['quantity'],
+                        ]);
+                        continue;
                     }
 
-                    if ($product->stock < $item['quantity']) {
-                        throw new \Exception("Insufficient stock for product: " . $product->name);
+
+                    if ($product->quantity > $item['quantity']) {
+                        throw new \Exception("Insufficient stock for: " . $product->name);
                     }
 
-                    // Create order item
                     OrderItem::create([
                         'order_id' => $order->id,
                         'order_code' => $orderCode,
                         'product_id' => $product->id,
                         'quantity' => $item['quantity'],
                         'price' => $item['price'],
-                        'subtotal' => $item['subtotal'],
+                        'subtotal' => $item['price'] * $item['quantity'],
                     ]);
 
-                    // Update product stock
                     $product->decrement('stock', $item['quantity']);
 
-                    // Remove from cart
-                    Cart::where('user_id', $user->id)
-                        ->where('product_id', $product->id)
-                        ->delete();
+                    
                 }
 
-                // Commit the transaction
                 DB::commit();
 
-                // Load the order with relationships
                 $order->load(['orderItems.product']);
 
                 return response()->json([
@@ -220,23 +230,18 @@ class OrderController extends Controller
                     'message' => 'Order created successfully',
                     'data' => $order,
                 ], 201);
+
             } catch (\Exception $e) {
-                // Rollback the transaction
                 DB::rollBack();
-
-                // Delete uploaded file if transaction failed
-                if ($proofOfPaymentPath) {
-                    Storage::disk('public')->delete($proofOfPaymentPath);
+                if ($receiptFilePath) {
+                    @unlink(public_path('images/proof_of_payments/' . $receiptFilePath));
                 }
-
                 throw $e;
             }
+
         } catch (\Exception $e) {
             Log::error('Error creating order: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => $e->getMessage(),
-            ], 500);
+            return response()->json(['success' => false, 'message' => $e->getMessage()], 500);
         }
     }
 

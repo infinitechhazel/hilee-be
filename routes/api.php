@@ -78,3 +78,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/account/shipping', [AccountSettingsController::class, 'updateShipping']);
     Route::put('/account/password', [AccountSettingsController::class, 'updatePassword']);
 });
+
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/orders', [OrderController::class, 'index']);
+    Route::post('/orders', [OrderController::class, 'store']);
+    Route::get('/orders/{id}', [OrderController::class, 'show']);
+    Route::patch('/orders/{id}/status', [OrderController::class, 'updateStatus']);
+});
