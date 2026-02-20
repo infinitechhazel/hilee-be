@@ -3,169 +3,164 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use Illuminate\Http\Request;
-use Illuminate\Support\Carbon;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class DashboardController extends Controller
 {
-    public function adminIndex(Request $request)
+    public function analytics(): JsonResponse
     {
-        $user = $request->user();
+        try {
+            // ── Key Metrics ───────────────────────────────────────────────
+            $totalRevenue = DB::table('orders')
+                ->whereNotIn('status', ['cancelled'])
+                ->sum('total_amount');
 
-        if (! $user || $user->role !== 'admin') {
+            $totalOrders = DB::table('orders')->count();
+
+            $averageOrderValue = $totalOrders > 0
+                ? round($totalRevenue / $totalOrders, 2)
+                : 0;
+
+            $totalCustomers = DB::table('orders')
+                ->distinct('customer_name')
+                ->count('customer_name');
+
+            // Growth rate: compare this month vs last month
+            $thisMonthRevenue = DB::table('orders')
+                ->whereNotIn('status', ['cancelled'])
+                ->whereMonth('created_at', Carbon::now()->month)
+                ->whereYear('created_at', Carbon::now()->year)
+                ->sum('total_amount');
+
+            $lastMonthRevenue = DB::table('orders')
+                ->whereNotIn('status', ['cancelled'])
+                ->whereMonth('created_at', Carbon::now()->subMonth()->month)
+                ->whereYear('created_at', Carbon::now()->subMonth()->year)
+                ->sum('total_amount');
+
+            $growthRate = $lastMonthRevenue > 0
+                ? round((($thisMonthRevenue - $lastMonthRevenue) / $lastMonthRevenue) * 100, 1)
+                : 0;
+
+            // ── Revenue Trends (last 30 days) ─────────────────────────────
+            $revenueData = DB::table('orders')
+                ->select(
+                    DB::raw('DATE(created_at) as date'),
+                    DB::raw('SUM(total_amount) as revenue'),
+                    DB::raw('COUNT(*) as orders')
+                )
+                ->where('created_at', '>=', Carbon::now()->subDays(30))
+                ->whereNotIn('status', ['cancelled'])
+                ->groupBy(DB::raw('DATE(created_at)'))
+                ->orderBy('date')
+                ->get()
+                ->map(fn($row) => [
+                    'date'    => Carbon::parse($row->date)->format('M d'),
+                    'revenue' => (float) $row->revenue,
+                    'orders'  => (int) $row->orders,
+                ]);
+
+            // ── Order Status Distribution ─────────────────────────────────
+            $statusCounts = DB::table('orders')
+                ->select('status', DB::raw('COUNT(*) as count'))
+                ->groupBy('status')
+                ->get();
+
+            $orderStatusData = $statusCounts->map(fn($row) => [
+                'status'     => $row->status,
+                'count'      => (int) $row->count,
+                'percentage' => $totalOrders > 0
+                    ? round(($row->count / $totalOrders) * 100, 1)
+                    : 0,
+            ]);
+
+            // ── Payment Method Breakdown ──────────────────────────────────
+            $paymentCounts = DB::table('orders')
+                ->select('payment_method as method', DB::raw('COUNT(*) as count'))
+                ->whereNotNull('payment_method')
+                ->groupBy('payment_method')
+                ->get();
+
+            $paymentMethodData = $paymentCounts->map(fn($row) => [
+                'method'     => $row->method,
+                'count'      => (int) $row->count,
+                'percentage' => $totalOrders > 0
+                    ? round(($row->count / $totalOrders) * 100, 1)
+                    : 0,
+            ]);
+
+            // ── Popular Products ──────────────────────────────────────────
+            $popularProducts = DB::table('order_items')
+                ->join('products', 'order_items.product_id', '=', 'products.id')
+                ->join('orders', 'order_items.order_id', '=', 'orders.id')
+                ->whereNotIn('orders.status', ['cancelled'])
+                ->select(
+                    'products.name',
+                    'products.category',
+                    DB::raw('COALESCE(products.is_spicy, 0) as is_spicy'),
+                    DB::raw('SUM(order_items.quantity) as orders'),
+                    DB::raw('SUM(order_items.quantity * order_items.price) as revenue')
+                )
+                ->groupBy('products.id', 'products.name', 'products.category', 'products.is_spicy')
+                ->orderByDesc('orders')
+                ->limit(10)
+                ->get()
+                ->map(fn($row) => [
+                    'name'     => $row->name,
+                    'category' => $row->category,
+                    'is_spicy' => (bool) $row->is_spicy,
+                    'orders'   => (int) $row->orders,
+                    'revenue'  => (float) $row->revenue,
+                ]);
+
+            // ── Category Performance ──────────────────────────────────────
+            $categoryData = DB::table('order_items')
+                ->join('products', 'order_items.product_id', '=', 'products.id')
+                ->join('orders', 'order_items.order_id', '=', 'orders.id')
+                ->whereNotIn('orders.status', ['cancelled'])
+                ->select(
+                    'products.category',
+                    DB::raw('SUM(order_items.quantity) as orders'),
+                    DB::raw('SUM(order_items.quantity * order_items.price) as revenue')
+                )
+                ->groupBy('products.category')
+                ->orderByDesc('revenue')
+                ->get()
+                ->map(fn($row) => [
+                    'category' => $row->category,
+                    'orders'   => (int) $row->orders,
+                    'revenue'  => (float) $row->revenue,
+                ]);
+
+            // ── Products Count ────────────────────────────────────────────
+            $productsCount = DB::table('products')->count();
+
+            return response()->json([
+                'success' => true,
+                'data'    => [
+                    'keyMetrics' => [
+                        'totalRevenue'      => (float) $totalRevenue,
+                        'totalOrders'       => (int)   $totalOrders,
+                        'averageOrderValue' => (float) $averageOrderValue,
+                        'totalCustomers'    => (int)   $totalCustomers,
+                        'growthRate'        => $growthRate,
+                    ],
+                    'revenueData'       => $revenueData,
+                    'orderStatusData'   => $orderStatusData,
+                    'paymentMethodData' => $paymentMethodData,
+                    'popularProducts'   => $popularProducts,
+                    'categoryData'      => $categoryData,
+                    'productsCount'     => (int) $productsCount,
+                ],
+            ]);
+
+        } catch (\Exception $e) {
             return response()->json([
                 'success' => false,
-                'message' => 'Unauthorized - Admin access required',
-            ], 403);
-        }
-
-        $timeRange = $request->get('timeRange', 'week');
-        $dateRange = $this->getDateRange($timeRange);
-
-        // Total Revenue
-        $totalRevenue = DB::table('orders')
-            ->whereBetween('created_at', [$dateRange['start'], $dateRange['end']])
-            ->where('status', 'completed')
-            ->sum('total_amount');
-
-        // Total Orders
-        $totalOrders = DB::table('orders')
-            ->whereBetween('created_at', [$dateRange['start'], $dateRange['end']])
-            ->count();
-
-        // New Customers
-        $totalCustomers = DB::table('users')
-            ->whereBetween('created_at', [$dateRange['start'], $dateRange['end']])
-            ->count();
-
-        // Average Order Value
-        $averageOrderValue = $totalOrders > 0
-            ? $totalRevenue / $totalOrders
-            : 0;
-
-        // Order Status Breakdown
-        $completed = DB::table('orders')
-            ->whereBetween('created_at', [$dateRange['start'], $dateRange['end']])
-            ->where('status', 'completed')
-            ->count();
-
-        $pending = DB::table('orders')
-            ->whereBetween('created_at', [$dateRange['start'], $dateRange['end']])
-            ->where('status', 'pending')
-            ->count();
-
-        $cancelled = DB::table('orders')
-            ->whereBetween('created_at', [$dateRange['start'], $dateRange['end']])
-            ->where('status', 'cancelled')
-            ->count();
-
-        $orderStatusData = [
-            'completed' => $completed,
-            'pending' => $pending,
-            'cancelled' => $cancelled,
-        ];
-
-        // Revenue Overview (Chart)
-        $revenueData = DB::table('orders')
-            ->select(
-                DB::raw('DATE(created_at) as date'),
-                DB::raw('SUM(total_amount) as total')
-            )
-            ->whereBetween('created_at', [$dateRange['start'], $dateRange['end']])
-            ->where('status', 'completed')
-            ->groupBy('date')
-            ->orderBy('date')
-            ->get();
-
-        // Top Products
-        $topProducts = DB::table('order_items')
-            ->join('orders', 'orders.id', '=', 'order_items.order_id')
-            ->join('products', 'products.id', '=', 'order_items.product_id')
-            ->select(
-                'products.name',
-                DB::raw('SUM(order_items.quantity) as orders'),
-                DB::raw('SUM(order_items.quantity * order_items.price) as revenue')
-            )
-            ->whereBetween('orders.created_at', [$dateRange['start'], $dateRange['end']])
-            ->where('orders.status', 'completed')
-            ->groupBy('products.name')
-            ->orderByDesc('orders')
-            ->limit(5)
-            ->get();
-
-        return response()->json([
-            'success' => true,
-            'data' => [
-                'keyMetrics' => [
-                    'totalRevenue' => $totalRevenue,
-                    'totalOrders' => $totalOrders,
-                    'averageOrderValue' => round($averageOrderValue, 2),
-                    'totalCustomers' => $totalCustomers,
-                    'growthRate' => 12.5,
-                ],
-                'revenueData' => $revenueData,
-                'orderStatusData' => $orderStatusData,
-                'popularProducts' => $topProducts,
-            ],
-        ]);
-    }
-
-    public function userIndex(Request $request)
-    {
-        $user = $request->user();
-
-        $totalOrders = DB::table('orders')
-            ->where('user_id', $user->id)
-            ->count();
-
-        $totalSpent = DB::table('orders')
-            ->where('user_id', $user->id)
-            ->where('status', 'completed')
-            ->sum('total_amount');
-
-        $pendingOrders = DB::table('orders')
-            ->where('user_id', $user->id)
-            ->where('status', 'pending')
-            ->count();
-
-        return response()->json([
-            'success' => true,
-            'stats' => [
-                'totalOrders' => $totalOrders,
-                'totalSpent' => round($totalSpent, 2),
-                'pendingOrders' => $pendingOrders,
-            ],
-        ]);
-    }
-
-    private function getDateRange($timeRange)
-    {
-        switch ($timeRange) {
-            case 'today':
-                return [
-                    'start' => Carbon::today(),
-                    'end' => Carbon::now(),
-                ];
-
-            case 'month':
-                return [
-                    'start' => Carbon::now()->startOfMonth(),
-                    'end' => Carbon::now(),
-                ];
-
-            case 'year':
-                return [
-                    'start' => Carbon::now()->startOfYear(),
-                    'end' => Carbon::now(),
-                ];
-
-            case 'week':
-            default:
-                return [
-                    'start' => Carbon::now()->startOfWeek(),
-                    'end' => Carbon::now(),
-                ];
+                'message' => 'Failed to fetch analytics: ' . $e->getMessage(),
+            ], 500);
         }
     }
 }
