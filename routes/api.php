@@ -91,7 +91,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // Reports
 Route::middleware('auth:sanctum')->group(function () {
-    Route::get('/reports', [OrderController::class, 'index']);
+    Route::get('/reports', [ReportController::class, 'index']);
 });
 
 // Dashboard

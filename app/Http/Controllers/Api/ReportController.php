@@ -3,134 +3,109 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Models\Report;
-use App\Models\ReportFile;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Validator;
 
 class ReportController extends Controller
 {
-    public function submit(Request $request)
-    {
-        // Validate the request
-        $validator = Validator::make($request->all(), [
-            'category' => 'required|in:road,streetlight,garbage,drainage,traffic,vandalism,noise,other',
-            'title' => 'required|string|max:255',
-            'description' => 'required|string',
-            'location' => 'required|string|max:255',
-            'urgency' => 'required|in:low,medium,high',
-            'timestamp' => 'required|date',
-        ]);
-
-        if ($validator->fails()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Validation failed',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        try {
-            DB::beginTransaction();
-
-            // Create the report
-            $report = Report::create([
-                'user_id' => $request->user()->id,
-                'category' => $request->category,
-                'title' => $request->title,
-                'description' => $request->description,
-                'location' => $request->location,
-                'urgency' => $request->urgency,
-                'status' => 'pending',
-                'timestamp' => $request->timestamp,
-            ]);
-
-            // Handle file uploads
-            $uploadedFiles = [];
-            foreach ($request->allFiles() as $key => $file) {
-                if (strpos($key, 'file_') === 0) {
-                    // Validate file
-                    $validator = Validator::make(
-                        [$key => $file],
-                        [$key => 'required|file|max:10240|mimes:jpg,jpeg,png,gif,mp4,mov,avi']
-                    );
-
-                    if ($validator->fails()) {
-                        continue; // Skip invalid files
-                    }
-
-                    // Determine file type
-                    $mimeType = $file->getMimeType();
-                    $type = str_starts_with($mimeType, 'image/') ? 'image' : 'video';
-
-                    // Store the file
-                    $path = $file->store('reports/' . $report->id, 'public');
-
-                    // Create file record
-                    $reportFile = ReportFile::create([
-                        'report_id' => $report->id,
-                        'name' => $file->getClientOriginalName(),
-                        'path' => $path,
-                        'type' => $type,
-                        'size' => $file->getSize(),
-                    ]);
-
-                    $uploadedFiles[] = [
-                        'id' => $reportFile->id,
-                        'name' => $reportFile->name,
-                        'url' => $reportFile->url,
-                    ];
-                }
-            }
-
-            DB::commit();
-
-            return response()->json([
-                'success' => true,
-                'message' => 'Report submitted successfully',
-                'data' => [
-                    'report_id' => $report->report_id,
-                    'id' => $report->id,
-                    'status' => $report->status,
-                    'files' => $uploadedFiles,
-                ]
-            ], 201);
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            
-            return response()->json([
-                'success' => false,
-                'message' => 'Failed to submit report: ' . $e->getMessage()
-            ], 500);
-        }
-    }
-
+    /**
+     * Return report data for a given time range.
+     */
     public function index(Request $request)
     {
-        $reports = Report::with(['files', 'user'])
-            ->where('user_id', $request->user()->id)
-            ->orderBy('created_at', 'desc')
-            ->paginate(10);
+        $range = $request->query('range', 'week'); // today, week, month, year
 
+        // Determine start date based on range
+        $startDate = match($range) {
+            'today' => now()->startOfDay(),
+            'week'  => now()->startOfWeek(),
+            'month' => now()->startOfMonth(),
+            'year'  => now()->startOfYear(),
+            default => now()->startOfWeek(),
+        };
+
+        $endDate = now();
+
+        // ── Summary ─────────────────────────────
+        $summary = DB::table('orders')
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->where('status', '!=', 'cancelled')
+            ->selectRaw('COUNT(*) as total_orders, SUM(total_amount) as total_revenue')
+            ->first();
+
+        $newCustomers = DB::table('users')
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->count();
+
+        $avgOrderValue = $summary->total_orders > 0
+            ? $summary->total_revenue / $summary->total_orders
+            : 0;
+
+        // ── Revenue Chart ───────────────────────
+        $revenueChart = DB::table('orders')
+            ->selectRaw('DATE(created_at) as period, SUM(total_amount) as revenue, COUNT(*) as orders')
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->groupBy('period')
+            ->orderBy('period')
+            ->get();
+
+        // ── Top Products ────────────────────────
+        $topProducts = DB::table('order_items')
+            ->join('products', 'products.id', '=', 'order_items.product_id')
+            ->join('orders', 'orders.id', '=', 'order_items.order_id')
+            ->whereBetween('orders.created_at', [$startDate, $endDate])
+            ->where('orders.status', '!=', 'cancelled')
+            ->selectRaw('products.id as product_id, products.name, SUM(order_items.qty) as total_qty, SUM(order_items.price * order_items.qty) as total_revenue')
+            ->groupBy('products.id', 'products.name')
+            ->orderByDesc('total_qty')
+            ->limit(10)
+            ->get();
+
+        // ── Order Status Stats ─────────────────
+        $statuses = ['pending', 'confirmed', 'preparing', 'ready', 'delivered', 'cancelled'];
+        $orderStats = [];
+        $totalOrders = 0;
+        foreach ($statuses as $status) {
+            $count = DB::table('orders')
+                ->whereBetween('created_at', [$startDate, $endDate])
+                ->where('status', $status)
+                ->count();
+            $orderStats[$status] = [
+                'count' => $count,
+                'rate'  => 0, // will calculate below
+            ];
+            $totalOrders += $count;
+        }
+
+        foreach ($statuses as $status) {
+            $orderStats[$status]['rate'] = $totalOrders > 0
+                ? round(($orderStats[$status]['count'] / $totalOrders) * 100, 2)
+                : 0;
+        }
+        $orderStats['total'] = $totalOrders;
+
+        // ── Payment Breakdown ──────────────────
+        $paymentRows = DB::table('orders')
+            ->selectRaw('payment_method as method, payment_status, COUNT(*) as count, SUM(total_amount) as revenue')
+            ->whereBetween('created_at', [$startDate, $endDate])
+            ->groupBy('payment_method', 'payment_status')
+            ->get();
+
+        // ── Response ───────────────────────────
         return response()->json([
             'success' => true,
-            'data' => $reports
-        ]);
-    }
-
-    public function show(Request $request, $id)
-    {
-        $report = Report::with(['files', 'user'])
-            ->where('id', $id)
-            ->where('user_id', $request->user()->id)
-            ->firstOrFail();
-
-        return response()->json([
-            'success' => true,
-            'data' => $report
+            'data' => [
+                'summary' => [
+                    'total_revenue'   => $summary->total_revenue ?? 0,
+                    'total_orders'    => $summary->total_orders ?? 0,
+                    'new_customers'   => $newCustomers,
+                    'avg_order_value' => $avgOrderValue,
+                ],
+                'revenue_chart'     => $revenueChart,
+                'top_products'      => $topProducts,
+                'order_stats'       => $orderStats,
+                'payment_breakdown' => $paymentRows,
+            ],
         ]);
     }
 }

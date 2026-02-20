@@ -36,16 +36,16 @@ class ProductController extends Controller
             // Stock filter
             if ($request->has('stock_status') && $request->stock_status !== 'all') {
                 if ($request->stock_status === 'in_stock') {
-                    $query->where('quantity', '>', 0);
+                    $query->where('stock', '>', 0);
                 } elseif ($request->stock_status === 'out_of_stock') {
-                    $query->where('quantity', 0);
+                    $query->where('stock', 0);
                 } elseif ($request->stock_status === 'low_stock') {
-                    $query->where('quantity', '>', 0)->where('quantity', '<', 10);
+                    $query->where('stock', '>', 0)->where('stock', '<', 10);
                 }
             }
 
             // Sorting
-            $sortBy    = $request->get('sort_by', 'created_at');
+            $sortBy = $request->get('sort_by', 'created_at');
             $sortOrder = $request->get('sort_order', 'desc');
             $query->orderBy($sortBy, $sortOrder);
 
@@ -55,12 +55,12 @@ class ProductController extends Controller
             }
 
             // Pagination
-            $perPage  = $request->get('per_page', 15);
+            $perPage = $request->get('per_page', 15);
             $products = $query->paginate($perPage);
 
             return response()->json([
                 'success' => true,
-                'data'    => $products,
+                'data' => $products,
             ]);
         } catch (\Exception $e) {
             Log::error('Error fetching products', [
@@ -71,7 +71,7 @@ class ProductController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch products',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -83,12 +83,12 @@ class ProductController extends Controller
     {
         try {
             $validated = $request->validate([
-                'name'        => 'required|string|max:255',
+                'name' => 'string|max:255',
                 'description' => 'nullable|string',
-                'price'       => 'required|numeric|min:0',
-                'quantity'    => 'required|integer|min:0',
-                'is_active'   => 'nullable|boolean',
-                'image'       => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:10240',
+                'price' => 'numeric|min:0',
+                'stock' => 'required|integer|min:0',  // add required
+                'is_active' => 'nullable|boolean',
+                'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:10240',
             ]);
 
             // Handle image upload
@@ -99,25 +99,25 @@ class ProductController extends Controller
 
             // Create product
             $product = Product::create([
-                'name'        => $validated['name'],
+                'name' => $validated['name'],
                 'description' => $validated['description'] ?? null,
-                'price'       => $validated['price'],
-                'quantity'    => $validated['quantity'],
-                'is_active'   => filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true,
-                'image'       => $imagePath,
+                'price' => $validated['price'],
+                'stock' => $validated['stock'],
+                'is_active' => filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true,
+                'image' => $imagePath,
             ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Product created successfully',
-                'data'    => $product,
+                'data' => $product,
             ], 201);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors'  => $e->errors(),
+                'errors' => $e->errors(),
             ], 422);
         } catch (\Exception $e) {
             Log::error('Error creating product', [
@@ -128,7 +128,7 @@ class ProductController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create product',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -143,7 +143,7 @@ class ProductController extends Controller
 
             return response()->json([
                 'success' => true,
-                'data'    => $product,
+                'data' => $product,
             ]);
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
             return response()->json([
@@ -153,13 +153,13 @@ class ProductController extends Controller
         } catch (\Exception $e) {
             Log::error('Error fetching product', [
                 'product_id' => $id,
-                'error'      => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch product',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -173,12 +173,12 @@ class ProductController extends Controller
             $product = Product::findOrFail($id);
 
             $validated = $request->validate([
-                'name'        => 'required|string|max:255',
+                'name' => 'string|max:255',
                 'description' => 'nullable|string',
-                'price'       => 'required|numeric|min:0',
-                'quantity'    => 'required|integer|min:0',
-                'is_active'   => 'nullable|boolean',
-                'image'       => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:10240',
+                'price' => 'numeric|min:0',
+                'stock' => 'integer|min:0',
+                'is_active' => 'nullable|boolean',
+                'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:10240',
             ]);
 
             // Handle image upload
@@ -191,18 +191,18 @@ class ProductController extends Controller
 
             // Update product
             $product->update([
-                'name'        => $validated['name'],
+                'name' => $validated['name'],
                 'description' => $validated['description'] ?? null,
-                'price'       => $validated['price'],
-                'quantity'    => $validated['quantity'],
-                'is_active'   => filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? $product->is_active,
-                'image'       => $validated['image'] ?? $product->image,
+                'price' => $validated['price'],
+                'stock' => $validated['stock'],
+                'is_active' => filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? $product->is_active,
+                'image' => $validated['image'] ?? $product->image,
             ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Product updated successfully',
-                'data'    => $product->fresh(),
+                'data' => $product->fresh(),
             ]);
 
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
@@ -214,19 +214,19 @@ class ProductController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors'  => $e->errors(),
+                'errors' => $e->errors(),
             ], 422);
         } catch (\Exception $e) {
             Log::error('Error updating product', [
                 'product_id' => $id,
-                'error'      => $e->getMessage(),
-                'trace'      => $e->getTraceAsString(),
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
             ]);
 
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update product',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -259,13 +259,13 @@ class ProductController extends Controller
         } catch (\Exception $e) {
             Log::error('Error deleting product', [
                 'product_id' => $id,
-                'error'      => $e->getMessage(),
+                'error' => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete product',
-                'error'   => $e->getMessage(),
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
@@ -276,7 +276,7 @@ class ProductController extends Controller
     private function handleImageUpload($file): string
     {
         try {
-            $filename   = time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
+            $filename = time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
             $uploadPath = public_path('images/products');
 
             if (!File::exists($uploadPath)) {
@@ -306,7 +306,7 @@ class ProductController extends Controller
             }
         } catch (\Exception $e) {
             Log::error('Error deleting product image', [
-                'path'  => $imagePath,
+                'path' => $imagePath,
                 'error' => $e->getMessage(),
             ]);
         }
