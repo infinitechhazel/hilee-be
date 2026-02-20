@@ -13,14 +13,14 @@ class Product extends Model
         'name',
         'description',
         'price',
-        'quantity',
+        'stock',
         'image',
         'is_active',
     ];
 
     protected $casts = [
         'price'      => 'decimal:2',
-        'quantity'   => 'integer',
+        'stock'   => 'integer',
         'is_active'  => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',
@@ -34,8 +34,8 @@ class Product extends Model
 
     public function getStockStatusAttribute(): string
     {
-        if ($this->quantity == 0) return 'out_of_stock';
-        if ($this->quantity < 10) return 'low_stock';
+        if ($this->stock == 0) return 'out_of_stock';
+        if ($this->stock < 10) return 'low_stock';
         return 'in_stock';
     }
 
@@ -47,27 +47,27 @@ class Product extends Model
 
     public function scopeInStock($query)
     {
-        return $query->where('quantity', '>', 0);
+        return $query->where('stock', '>', 0);
     }
 
     public function scopeOutOfStock($query)
     {
-        return $query->where('quantity', 0);
+        return $query->where('stock', 0);
     }
 
     public function scopeLowStock($query)
     {
-        return $query->where('quantity', '>', 0)->where('quantity', '<', 10);
+        return $query->where('stock', '>', 0)->where('stock', '<', 10);
     }
 
     // Helpers
     public function isInStock(): bool
     {
-        return $this->quantity > 0;
+        return $this->stock > 0;
     }
 
     public function isLowStock(): bool
     {
-        return $this->quantity > 0 && $this->quantity < 10;
+        return $this->stock > 0 && $this->stock < 10;
     }
 }

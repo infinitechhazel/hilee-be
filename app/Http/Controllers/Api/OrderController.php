@@ -103,14 +103,14 @@ class OrderController extends Controller
             }
 
             $validator = Validator::make($request->all(), [
-                'items' => 'required|array|min:1',
+                'items' => 'array|min:1',
                 'items.*.id' => 'nullable',           // id can be null for guest items
-                'items.*.price' => 'required|numeric',
-                'items.*.quantity' => 'required|integer|min:1',
-                'customer_name' => 'required|string',
-                'customer_email' => 'required|email',
-                'customer_phone' => 'required|string',
-                'payment_method' => 'required|string|in:cash,gcash,security_bank',
+                'items.*.price' => 'numeric',
+                'items.*.stock' => 'integer|min:1',
+                'customer_name' => 'string',
+                'customer_email' => 'email',
+                'customer_phone' => 'string',
+                'payment_method' => 'string|in:cash,gcash,security_bank',
             ]);
 
             if ($validator->fails()) {
@@ -195,7 +195,7 @@ class OrderController extends Controller
                             'order_code' => $orderCode,
                             'product_id' => null,
                             'name' => $item['name'],
-                            'quantity' => $item['quantity'],
+                            'quantity' => $item['quantity'],   // 'quantity' not 'stock'
                             'price' => $item['price'],
                             'subtotal' => $item['price'] * $item['quantity'],
                         ]);
@@ -203,7 +203,7 @@ class OrderController extends Controller
                     }
 
 
-                    if ($product->quantity > $item['quantity']) {
+                    if ($product->stock < $item['quantity']) {
                         throw new \Exception("Insufficient stock for: " . $product->name);
                     }
 
@@ -211,14 +211,15 @@ class OrderController extends Controller
                         'order_id' => $order->id,
                         'order_code' => $orderCode,
                         'product_id' => $product->id,
-                        'quantity' => $item['quantity'],
+                        'quantity' => $item['quantity'],   // 'quantity' not 'stock'
                         'price' => $item['price'],
                         'subtotal' => $item['price'] * $item['quantity'],
                     ]);
 
+
                     $product->decrement('stock', $item['quantity']);
 
-                    
+
                 }
 
                 DB::commit();
@@ -261,7 +262,7 @@ class OrderController extends Controller
             }
 
             $validator = Validator::make($request->all(), [
-                'status' => 'required|string|in:pending,confirmed,processing,shipped,completed,cancelled',
+                'status' => 'required|string|in:pending,confirmed,preparing,ready,delivered,cancelled',
             ]);
 
             if ($validator->fails()) {
@@ -306,123 +307,45 @@ class OrderController extends Controller
     /**
      * Cancel an order (user can only cancel pending orders)
      */
-    public function cancel(Request $request, $orderCode)
+    public function cancel(Request $request, $id)
     {
         try {
-            // Log the incoming request
-            Log::info('Cancel order request received', [
-                'order_code' => $orderCode,
-                'user_id' => $request->user()?->id,
-            ]);
-
             $user = $request->user();
 
             if (!$user) {
-                Log::warning('Unauthorized cancel attempt', [
-                    'order_code' => $orderCode,
-                ]);
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Unauthorized',
-                ], 401);
+                return response()->json(['success' => false, 'message' => 'Unauthorized'], 401);
             }
 
-            // Log the query attempt
-            Log::info('Searching for order', [
-                'order_code' => $orderCode,
-                'user_id' => $user->id,
-            ]);
-
-            $order = Order::where('order_code', $orderCode)
+            // Find by ID and ensure it belongs to the user
+            $order = Order::where('id', $id)
                 ->where('user_id', $user->id)
                 ->first();
 
             if (!$order) {
-                Log::warning('Order not found', [
-                    'order_code' => $orderCode,
-                    'user_id' => $user->id,
-                ]);
-
-                // Additional debug: Check if order exists at all
-                $orderExists = Order::where('order_code', $orderCode)->exists();
-                Log::info('Order exists in database?', [
-                    'order_code' => $orderCode,
-                    'exists' => $orderExists,
-                ]);
-
-                return response()->json([
-                    'success' => false,
-                    'message' => 'Order not found',
-                ], 404);
+                return response()->json(['success' => false, 'message' => 'Order not found'], 404);
             }
 
-            Log::info('Order found', [
-                'order_id' => $order->id,
-                'order_code' => $order->order_code,
-                'status' => $order->status,
-                'user_id' => $order->user_id,
-            ]);
-
-            if ($order->status !== 'pending') {
-                Log::warning('Cannot cancel order - invalid status', [
-                    'order_id' => $order->id,
-                    'order_code' => $order->order_code,
-                    'current_status' => $order->status,
-                ]);
+            if (!in_array($order->status, ['pending', 'confirmed'])) {
                 return response()->json([
                     'success' => false,
-                    'message' => 'Only pending orders can be cancelled',
+                    'message' => 'Only pending or confirmed orders can be cancelled',
                 ], 400);
             }
 
             DB::beginTransaction();
 
             try {
-                Log::info('Starting order cancellation process', [
-                    'order_id' => $order->id,
-                    'order_code' => $order->order_code,
-                ]);
-
                 // Restore product stock
                 foreach ($order->orderItems as $orderItem) {
-                    Log::info('Restoring stock for product', [
-                        'product_id' => $orderItem->product_id,
-                        'quantity' => $orderItem->quantity,
-                    ]);
-
                     $product = Product::find($orderItem->product_id);
                     if ($product) {
-                        $oldStock = $product->stock;
                         $product->increment('stock', $orderItem->quantity);
-                        Log::info('Stock restored', [
-                            'product_id' => $product->id,
-                            'old_stock' => $oldStock,
-                            'new_stock' => $product->stock,
-                            'restored_quantity' => $orderItem->quantity,
-                        ]);
-                    } else {
-                        Log::warning('Product not found for stock restoration', [
-                            'product_id' => $orderItem->product_id,
-                        ]);
                     }
                 }
 
-                // Update order status
-                $order->update([
-                    'status' => 'cancelled',
-                ]);
-
-                Log::info('Order status updated to cancelled', [
-                    'order_id' => $order->id,
-                    'order_code' => $order->order_code,
-                ]);
+                $order->update(['status' => 'cancelled']);
 
                 DB::commit();
-
-                Log::info('Order cancellation completed successfully', [
-                    'order_id' => $order->id,
-                    'order_code' => $order->order_code,
-                ]);
 
                 $order->load(['orderItems.product']);
 
@@ -433,22 +356,10 @@ class OrderController extends Controller
                 ]);
             } catch (\Exception $e) {
                 DB::rollBack();
-                Log::error('Error during order cancellation transaction', [
-                    'order_code' => $orderCode,
-                    'error' => $e->getMessage(),
-                    'trace' => $e->getTraceAsString(),
-                ]);
                 throw $e;
             }
         } catch (\Exception $e) {
-            Log::error('Error cancelling order', [
-                'order_code' => $orderCode,
-                'user_id' => $request->user()?->id,
-                'error' => $e->getMessage(),
-                'file' => $e->getFile(),
-                'line' => $e->getLine(),
-                'trace' => $e->getTraceAsString(),
-            ]);
+            Log::error('Error cancelling order: ' . $e->getMessage());
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to cancel order',
@@ -457,36 +368,6 @@ class OrderController extends Controller
         }
     }
 
-
-    /**
-     * Handle image upload and return the path
-     */
-    private function handleImageUpload($file)
-    {
-        try {
-            // Generate unique filename
-            $filename = time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
-
-            // Define upload path (public/images/products)
-            $uploadPath = public_path('images/proof_of_payments');
-
-            // Create directory if it doesn't exist
-            if (!File::exists($uploadPath)) {
-                File::makeDirectory($uploadPath, 0755, true);
-            }
-
-            // Move file to public directory
-            $file->move($uploadPath, $filename);
-
-            // Return relative path
-            return 'images/products/' . $filename;
-        } catch (\Exception $e) {
-            Log::error('Error uploading product image', [
-                'error' => $e->getMessage(),
-            ]);
-            throw $e;
-        }
-    }
 
 
 }

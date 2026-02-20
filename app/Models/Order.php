@@ -11,13 +11,21 @@ class Order extends Model
 
     protected $fillable = [
         'user_id',
+        'order_number',
         'order_code',
-        'total_price',
-        'status',
+        'customer_name',
+        'customer_email',
+        'customer_phone',
+        'delivery_address',
+        'delivery_city',
+        'delivery_zip_code',
         'payment_method',
-        'proof_of_payment',
+        'payment_status',
+        'status',        // ← make sure this is here
+        'subtotal',
+        'total',
         'notes',
-        'ordered_at',
+        'receipt_file',
     ];
 
     protected $casts = [
