@@ -14,13 +14,17 @@ class Product extends Model
         'description',
         'price',
         'stock',
+        'category',
         'image',
+        'tiktok_url',
+        'shopee_url',
+        'lazada_url',
         'is_active',
     ];
 
     protected $casts = [
         'price'      => 'decimal:2',
-        'stock'   => 'integer',
+        'stock'      => 'integer',
         'is_active'  => 'boolean',
         'created_at' => 'datetime',
         'updated_at' => 'datetime',

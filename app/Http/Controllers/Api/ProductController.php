@@ -11,15 +11,11 @@ use Illuminate\Support\Str;
 
 class ProductController extends Controller
 {
-    /**
-     * Display a listing of products with filters and pagination
-     */
     public function index(Request $request)
     {
         try {
             $query = Product::query();
 
-            // Search filter
             if ($request->has('search') && $request->search) {
                 $search = $request->search;
                 $query->where(function ($q) use ($search) {
@@ -28,12 +24,10 @@ class ProductController extends Controller
                 });
             }
 
-            // Status filter (active/inactive)
             if ($request->has('status') && $request->status !== 'all') {
                 $query->where('is_active', $request->status === 'active');
             }
 
-            // Stock filter
             if ($request->has('stock_status') && $request->stock_status !== 'all') {
                 if ($request->stock_status === 'in_stock') {
                     $query->where('stock', '>', 0);
@@ -44,17 +38,14 @@ class ProductController extends Controller
                 }
             }
 
-            // Sorting
             $sortBy = $request->get('sort_by', 'created_at');
             $sortOrder = $request->get('sort_order', 'desc');
             $query->orderBy($sortBy, $sortOrder);
 
-            // Return all without pagination if requested
             if ($request->get('paginate') === 'false') {
                 return response()->json($query->get());
             }
 
-            // Pagination
             $perPage = $request->get('per_page', 15);
             $products = $query->paginate($perPage);
 
@@ -76,48 +67,51 @@ class ProductController extends Controller
         }
     }
 
-    /**
-     * Store a newly created product
-     */
     public function store(Request $request)
     {
         try {
             $validated = $request->validate([
-                'name' => 'string|max:255',
+                'name'        => 'required|string|max:255',
                 'description' => 'nullable|string',
-                'price' => 'numeric|min:0',
-                'stock' => 'required|integer|min:0',  // add required
-                'is_active' => 'nullable|boolean',
-                'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:10240',
+                'price'       => 'required|numeric|min:0',
+                'stock'       => 'required|integer|min:0',
+                'category'    => 'nullable|string|max:100',
+                'is_active'   => 'nullable|boolean',
+                'image'       => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:10240',
+                'tiktok_url'  => 'nullable|string',
+                'shopee_url'  => 'nullable|string',
+                'lazada_url'  => 'nullable|string',
             ]);
 
-            // Handle image upload
             $imagePath = null;
             if ($request->hasFile('image')) {
                 $imagePath = $this->handleImageUpload($request->file('image'));
             }
 
-            // Create product
             $product = Product::create([
-                'name' => $validated['name'],
+                'name'        => $validated['name'],
                 'description' => $validated['description'] ?? null,
-                'price' => $validated['price'],
-                'stock' => $validated['stock'],
-                'is_active' => filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true,
-                'image' => $imagePath,
+                'price'       => $validated['price'],
+                'stock'       => $validated['stock'],
+                'category'    => !empty($validated['category']) ? $validated['category'] : null,
+                'is_active'   => filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true,
+                'image'       => $imagePath,
+                'tiktok_url'  => !empty($validated['tiktok_url']) ? $validated['tiktok_url'] : null,
+                'shopee_url'  => !empty($validated['shopee_url']) ? $validated['shopee_url'] : null,
+                'lazada_url'  => !empty($validated['lazada_url']) ? $validated['lazada_url'] : null,
             ]);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Product created successfully',
-                'data' => $product,
+                'data'    => $product,
             ], 201);
 
         } catch (\Illuminate\Validation\ValidationException $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors' => $e->errors(),
+                'errors'  => $e->errors(),
             ], 422);
         } catch (\Exception $e) {
             Log::error('Error creating product', [
@@ -128,14 +122,11 @@ class ProductController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to create product',
-                'error' => $e->getMessage(),
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * Display the specified product
-     */
     public function show($id)
     {
         try {
@@ -143,7 +134,7 @@ class ProductController extends Controller
 
             return response()->json([
                 'success' => true,
-                'data' => $product,
+                'data'    => $product,
             ]);
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
             return response()->json([
@@ -153,35 +144,35 @@ class ProductController extends Controller
         } catch (\Exception $e) {
             Log::error('Error fetching product', [
                 'product_id' => $id,
-                'error' => $e->getMessage(),
+                'error'      => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to fetch product',
-                'error' => $e->getMessage(),
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * Update the specified product
-     */
     public function update(Request $request, $id)
     {
         try {
             $product = Product::findOrFail($id);
 
             $validated = $request->validate([
-                'name' => 'string|max:255',
-                'description' => 'nullable|string',
-                'price' => 'numeric|min:0',
-                'stock' => 'integer|min:0',
-                'is_active' => 'nullable|boolean',
-                'image' => 'nullable|image|mimes:jpeg,jpg,png,gif,webp|max:10240',
+                'name'        => 'sometimes|required|string|max:255',
+                'description' => 'sometimes|nullable|string',
+                'price'       => 'sometimes|required|numeric|min:0',
+                'stock'       => 'sometimes|required|integer|min:0',
+                'category'    => 'sometimes|nullable|string|max:100',
+                'is_active'   => 'sometimes|nullable|boolean',
+                'image'       => 'sometimes|nullable|image|mimes:jpeg,jpg,png,gif,webp|max:10240',
+                'tiktok_url'  => 'sometimes|nullable|string',
+                'shopee_url'  => 'sometimes|nullable|string',
+                'lazada_url'  => 'sometimes|nullable|string',
             ]);
 
-            // Handle image upload
             if ($request->hasFile('image')) {
                 if ($product->image) {
                     $this->deleteImage($product->image);
@@ -189,20 +180,42 @@ class ProductController extends Controller
                 $validated['image'] = $this->handleImageUpload($request->file('image'));
             }
 
-            // Update product
-            $product->update([
-                'name' => $validated['name'],
-                'description' => $validated['description'] ?? null,
-                'price' => $validated['price'],
-                'stock' => $validated['stock'],
-                'is_active' => filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? $product->is_active,
-                'image' => $validated['image'] ?? $product->image,
-            ]);
+            $updates = [];
+
+            if (array_key_exists('name', $validated))
+                $updates['name'] = $validated['name'];
+
+            if (array_key_exists('description', $validated))
+                $updates['description'] = $validated['description'];
+
+            if (array_key_exists('price', $validated))
+                $updates['price'] = $validated['price'];
+
+            if (array_key_exists('stock', $validated))
+                $updates['stock'] = $validated['stock'];
+
+            if (array_key_exists('category', $validated))
+                $updates['category'] = !empty($validated['category']) ? $validated['category'] : null;
+
+            if (array_key_exists('image', $validated))
+                $updates['image'] = $validated['image'];
+
+            if ($request->has('is_active')) {
+                $updates['is_active'] = filter_var($request->is_active, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? $product->is_active;
+            }
+
+            foreach (['tiktok_url', 'shopee_url', 'lazada_url'] as $urlField) {
+                if (array_key_exists($urlField, $validated)) {
+                    $updates[$urlField] = !empty($validated[$urlField]) ? $validated[$urlField] : null;
+                }
+            }
+
+            $product->update($updates);
 
             return response()->json([
                 'success' => true,
                 'message' => 'Product updated successfully',
-                'data' => $product->fresh(),
+                'data'    => $product->fresh(),
             ]);
 
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
@@ -214,42 +227,35 @@ class ProductController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Validation failed',
-                'errors' => $e->errors(),
+                'errors'  => $e->errors(),
             ], 422);
         } catch (\Exception $e) {
             Log::error('Error updating product', [
                 'product_id' => $id,
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
+                'error'      => $e->getMessage(),
+                'trace'      => $e->getTraceAsString(),
             ]);
 
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to update product',
-                'error' => $e->getMessage(),
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * Remove the specified product
-     */
     public function destroy($id)
     {
         try {
             $product = Product::findOrFail($id);
 
-            // Delete image if exists
             if ($product->image) {
                 $this->deleteImage($product->image);
             }
 
             $product->delete();
 
-            return response()->json([
-                'success' => true,
-                'message' => 'Product deleted successfully',
-            ]);
+            return response()->json(null, 204);
 
         } catch (\Illuminate\Database\Eloquent\ModelNotFoundException $e) {
             return response()->json([
@@ -259,24 +265,21 @@ class ProductController extends Controller
         } catch (\Exception $e) {
             Log::error('Error deleting product', [
                 'product_id' => $id,
-                'error' => $e->getMessage(),
+                'error'      => $e->getMessage(),
             ]);
 
             return response()->json([
                 'success' => false,
                 'message' => 'Failed to delete product',
-                'error' => $e->getMessage(),
+                'error'   => $e->getMessage(),
             ], 500);
         }
     }
 
-    /**
-     * Handle image upload and return the path
-     */
     private function handleImageUpload($file): string
     {
         try {
-            $filename = time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
+            $filename   = time() . '_' . Str::random(10) . '.' . $file->getClientOriginalExtension();
             $uploadPath = public_path('images/products');
 
             if (!File::exists($uploadPath)) {
@@ -292,9 +295,6 @@ class ProductController extends Controller
         }
     }
 
-    /**
-     * Delete image from filesystem
-     */
     private function deleteImage(string $imagePath): void
     {
         try {
@@ -306,7 +306,7 @@ class ProductController extends Controller
             }
         } catch (\Exception $e) {
             Log::error('Error deleting product image', [
-                'path' => $imagePath,
+                'path'  => $imagePath,
                 'error' => $e->getMessage(),
             ]);
         }

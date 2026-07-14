@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\CartController;
 use App\Http\Controllers\Api\OrderController;
 use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\PartnershipInquiryController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -27,7 +28,6 @@ Route::middleware('auth:sanctum')->group(function () {
 
 // ===================================
 // CART
-
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/cart', [CartController::class, 'index']);
     Route::post('/cart', [CartController::class, 'store']);
@@ -43,24 +43,24 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/users/statistics', [UserController::class, 'statistics']);
     Route::put('/users/{id}/deactivate', [UserController::class, 'deactivate']);
     Route::put('/users/{id}/reactivate', [UserController::class, 'reactivate']);
-
 });
 
 // ===================================
-// PRODUCTS (admin)
+// PRODUCTS
 
-
-// Products - GET is public, write actions are admin-protected
+// Public — read only
 Route::get('/products', [ProductController::class, 'index']);
 Route::get('/products/{id}', [ProductController::class, 'show']);
 
+// Protected — write actions
 Route::middleware('auth:sanctum')->group(function () {
     Route::post('/products', [ProductController::class, 'store']);
-    Route::put('/products/{id}', [ProductController::class, 'update']);  // For PUT requests
-    Route::post('/products/{id}', [ProductController::class, 'update']);  // For POST with _method=PUT
+    Route::put('/products/{id}', [ProductController::class, 'update']);
+    Route::post('/products/{id}', [ProductController::class, 'update']); // _method=PUT spoofing
     Route::delete('/products/{id}', [ProductController::class, 'destroy']);
 });
 
+// ===================================
 // DASHBOARD
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('user/dashboard', [DashboardController::class, 'userIndex']);
@@ -81,6 +81,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::put('/account/password', [AccountSettingsController::class, 'updatePassword']);
 });
 
+// Orders
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('/orders', [OrderController::class, 'index']);
     Route::post('/orders', [OrderController::class, 'store']);
@@ -95,5 +96,13 @@ Route::middleware('auth:sanctum')->group(function () {
 });
 
 // Dashboard
-
 Route::get('/dashboard/analytics', [DashboardController::class, 'analytics']);
+Route::get('auth/verify-email', [AuthController::class, 'verifyEmail']);
+
+Route::post('/partnership-inquiries', [PartnershipInquiryController::class, 'store']);
+ 
+// ── Admin (protected) ─────────────────────────────────────────────────────────
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/partnership-inquiries', [PartnershipInquiryController::class, 'index']);
+    Route::patch('/partnership-inquiries/{inquiry}/status', [PartnershipInquiryController::class, 'updateStatus']);
+});

@@ -11,6 +11,50 @@ use Illuminate\Support\Facades\Validator;
 
 class AuthController extends Controller
 {
+    public function verifyEmail(Request $request)
+{
+    $token = $request->query('token');
+
+    if (!$token) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Verification token is required.',
+        ], 400);
+    }
+
+    $user = User::where('verification_token', $token)->first();
+
+    if (!$user) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Invalid or expired verification token.',
+        ], 404);
+    }
+
+    // Check expiry
+    if ($user->verification_token_expiry && now()->isAfter($user->verification_token_expiry)) {
+        return response()->json([
+            'success' => false,
+            'message' => 'Verification token has expired. Please register again.',
+        ], 410);
+    }
+
+    // Mark as verified
+    $user->update([
+        'email_verified'            => true,
+        'email_verified_at'         => now(),
+        'verification_token'        => null,
+        'verification_token_expiry' => null,
+    ]);
+
+    Log::info('Email verified', ['user_id' => $user->id, 'email' => $user->email]);
+
+    return response()->json([
+        'success' => true,
+        'message' => 'Email verified successfully! You can now login.',
+        'data'    => ['user' => $this->formatUser($user)],
+    ]);
+}
     public function account(Request $request)
     {
         try {
